@@ -33,7 +33,10 @@ export function App() {
   }, [])
 
   useEffect(() => {
-    if (!sesion) return setYo(null)
+    if (!sesion) {
+      setYo(null)
+      return
+    }
     const u = sesion.user
     supabase.rpc('aceptar_invitaciones').then(() =>
       supabase
@@ -45,7 +48,9 @@ export function App() {
     )
   }, [sesion])
 
-  useEffect(() => window.scrollTo(0, 0), [vista])
+  useEffect(() => {
+    window.scrollTo(0, 0)
+  }, [vista])
 
   if (!configurado) {
     return (
