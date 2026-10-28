@@ -7,16 +7,18 @@ App web instalable en el celular para llevar el presupuesto personal y los gasto
 - **Cuentas y plantillas**: tarjetas, efectivo, sobres y gastos fijos, todo editable.
 - **Préstamos y pagos**: próximos vencimientos, préstamos que debo o me deben, avisos.
 
-## Qué tiene que crear: Supabase (gratis)
+## Qué tiene que crear: Firebase (gratis)
 
-1. Entre a <https://supabase.com> y cree una cuenta.
-2. **New project**: nombre `presupuesto`, invente una contraseña para la base de datos (guárdela) y escoja la región más cercana (por ejemplo *East US*). Espere un par de minutos a que termine.
-3. Menú izquierdo → **SQL Editor** → **New query**. Pegue todo el archivo [`supabase/schema.sql`](supabase/schema.sql) y toque **Run**. Debe decir *Success*.
-4. Menú **Authentication** → **Sign In / Providers** → **Email**: déjelo activo. Para probar más rápido puede apagar **Confirm email**; si lo deja encendido, cada persona confirma su correo al crear la cuenta.
-5. **Project Settings** → **API Keys** (o **Data API**): copie la **Project URL** y la clave **anon / public**.
-6. En esta carpeta, copie `.env.example` como `.env.local` y pegue esos dos datos.
+Se usa el plan gratis de Firebase (Spark): cuentas de usuario y base de datos Firestore. No pide tarjeta.
 
-> La clave *anon* puede ir en la app: los permisos de la base de datos (RLS) son los que protegen los datos. **Nunca** use ni comparta la clave *service_role*.
+1. Entre a <https://console.firebase.google.com> con su cuenta de Google y toque **Crear un proyecto**. Nombre: `presupuesto`. Google Analytics puede apagarlo.
+2. **Cuentas:** menú izquierdo → **Compilación → Authentication** → **Comenzar** → **Correo electrónico/contraseña** → actívelo → **Guardar**.
+3. **Base de datos:** **Compilación → Firestore Database** → **Crear base de datos** → ubicación cercana (por ejemplo `nam5` o `us-east1`) → **modo de producción** → **Crear**.
+4. **Privacidad:** dentro de Firestore, pestaña **Reglas**. Borre lo que haya, pegue todo el archivo [`firestore.rules`](firestore.rules) y toque **Publicar**. Estas reglas hacen que su presupuesto lo vea solo usted y cada grupo solo sus miembros.
+5. **Datos de conexión:** ⚙ junto a "Descripción general del proyecto" → **Configuración del proyecto** → abajo, en **Tus apps**, toque el ícono **`</>`** (web). Apodo `presupuesto` → **Registrar app** (no hace falta Hosting todavía). Le muestra un bloque `firebaseConfig`.
+6. En esta carpeta, copie `.env.example` como `.env.local` y pegue `apiKey`, `authDomain`, `projectId` y `appId` de ese bloque.
+
+> El `apiKey` de Firebase no es secreto: va dentro de la app. Lo que protege los datos son las reglas del paso 4.
 
 ## Correr la app en su compu
 
@@ -38,7 +40,7 @@ Abra la dirección que sale (`http://localhost:5173`). Para probarla en el celul
 
 - Cuadre con el banco (subir el CSV del BN).
 - Avisos con la app cerrada (ahora el aviso sale al abrir la app).
-- Publicarla en internet (Vercel o Netlify) para usarla sin la compu.
+- Publicarla en internet (Firebase Hosting, también gratis) para usarla sin la compu.
 
 ## Comandos
 

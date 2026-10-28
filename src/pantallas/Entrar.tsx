@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react'
-import { supabase } from '../supabase'
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile } from 'firebase/auth'
+import { auth, mensaje } from '../firebase'
 import { Icono, MensajeError } from '../comun'
 
 export function Entrar() {
@@ -9,23 +10,24 @@ export function Entrar() {
   const [clave, setClave] = useState('')
   const [verClave, setVerClave] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [aviso, setAviso] = useState<string | null>(null)
   const [enviando, setEnviando] = useState(false)
 
   async function enviar(e: FormEvent) {
     e.preventDefault()
     setError(null)
-    setAviso(null)
     setEnviando(true)
-    if (modo === 'entrar') {
-      const { error } = await supabase.auth.signInWithPassword({ email, password: clave })
-      if (error) setError(traducir(error.message))
-    } else {
-      const { data, error } = await supabase.auth.signUp({ email, password: clave, options: { data: { nombre } } })
-      if (error) setError(traducir(error.message))
-      else if (!data.session) setAviso('Listo. Le llegó un correo para confirmar la cuenta; después vuelva aquí y entre.')
+    try {
+      if (modo === 'entrar') {
+        await signInWithEmailAndPassword(auth, email.trim(), clave)
+      } else {
+        sessionStorage.setItem('nombre-nuevo', nombre.trim())
+        const r = await createUserWithEmailAndPassword(auth, email.trim(), clave)
+        await updateProfile(r.user, { displayName: nombre.trim() })
+      }
+    } catch (e) {
+      setError(mensaje(e))
+      setEnviando(false)
     }
-    setEnviando(false)
   }
 
   return (
@@ -80,7 +82,6 @@ export function Entrar() {
           </div>
         </label>
         <MensajeError texto={error} />
-        {aviso && <div className="aviso">{aviso}</div>}
         <button className="btn verde" disabled={enviando}>
           {modo === 'entrar' ? 'Entrar' : 'Crear cuenta'}
         </button>
@@ -89,12 +90,3 @@ export function Entrar() {
   )
 }
 
-// Mensajes de Supabase en palabras claras.
-function traducir(m: string): string {
-  if (m === 'Invalid login credentials') return 'Correo o contraseña incorrectos.'
-  if (m === 'Failed to fetch' || m.includes('NetworkError')) return 'No se pudo conectar con el servidor. Revise el internet o que Supabase esté configurado en .env.local.'
-  if (m.includes('already registered')) return 'Ese correo ya tiene cuenta. Toque "Entrar".'
-  if (m.includes('Email not confirmed')) return 'Falta confirmar el correo: busque el mensaje de Supabase en su bandeja.'
-  if (m.includes('Password should be')) return 'La contraseña debe tener al menos 6 caracteres.'
-  return m
-}

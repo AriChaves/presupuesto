@@ -1,20 +1,20 @@
 import { useState, type FormEvent } from 'react'
-import { supabase, revisar } from '../supabase'
-import { Cargando, MensajeError, leerMonto, useCarga, useSesion } from '../comun'
+import { agregar as agregarDoc, borrar, cambiar, listar, where } from '../datos'
+import { Cargando, MensajeError, leerMonto, useCarga, useHacer, useSesion } from '../comun'
 import { colones, mesDe, proximosPagos, type ProximoPago, type Vencimiento } from '../dinero'
 import type { Cuenta, Prestamo, Renglon } from '../tipos'
 
 // Gastos fijos sin pagar este mes + cuotas de préstamos que debo.
 export async function cargarVencimientos(): Promise<ProximoPago[]> {
-  const [r, p] = await Promise.all([
-    supabase.from('renglones').select('nombre, monto, dia_vence, hecho').eq('mes', mesDe(new Date())).eq('hecho', false).not('dia_vence', 'is', null),
-    supabase.from('prestamos').select('*').eq('direccion', 'debo').not('dia_pago', 'is', null),
+  const [renglones, prestamos] = await Promise.all([
+    listar<Renglon>('renglones', where('mes', '==', mesDe(new Date()))),
+    listar<Prestamo>('prestamos'),
   ])
   const items: Vencimiento[] = [
-    ...(revisar(r) as Pick<Renglon, 'nombre' | 'monto' | 'dia_vence'>[]).map((x) => ({ nombre: x.nombre, monto: Number(x.monto), dia: x.dia_vence! })),
-    ...(revisar(p) as Prestamo[])
-      .filter((x) => x.cuotas_pagadas < x.cuotas_total)
-      .map((x) => ({ nombre: `Cuota ${x.nombre}`, monto: Number(x.cuota), dia: x.dia_pago!, detalle: 'Préstamo' })),
+    ...renglones.filter((x) => !x.hecho && x.dia_vence).map((x) => ({ nombre: x.nombre, monto: x.monto, dia: x.dia_vence! })),
+    ...prestamos
+      .filter((x) => x.direccion === 'debo' && x.dia_pago && x.cuotas_pagadas < x.cuotas_total)
+      .map((x) => ({ nombre: `Cuota ${x.nombre}`, monto: x.cuota, dia: x.dia_pago!, detalle: 'Préstamo' })),
   ]
   return proximosPagos(items, new Date())
 }
@@ -47,12 +47,8 @@ export function Pagos() {
   const [error, setError] = useState<string | null>(null)
   const [dir, setDir] = useState<'debo' | 'me_deben'>('debo')
   const carga = useCarga(async () => {
-    const [v, p, c] = await Promise.all([
-      cargarVencimientos(),
-      supabase.from('prestamos').select('*').order('nombre'),
-      supabase.from('cuentas').select('*').order('orden'),
-    ])
-    return { vencimientos: v, prestamos: revisar(p) as Prestamo[], cuentas: revisar(c) as Cuenta[] }
+    const [vencimientos, prestamos, cuentas] = await Promise.all([cargarVencimientos(), listar<Prestamo>('prestamos'), listar<Cuenta>('cuentas')])
+    return { vencimientos, prestamos, cuentas }
   }, [])
   const [avisos, setAvisos] = useState(() => typeof Notification !== 'undefined' && Notification.permission === 'granted' && localStorage.getItem(AVISO_KEY) === '1')
 
@@ -65,12 +61,7 @@ export function Pagos() {
     } else setError('El celular no dio permiso para los avisos.')
   }
 
-  async function hacer(fn: () => PromiseLike<{ error: { message: string } | null }>) {
-    setError(null)
-    const { error } = await fn()
-    if (error) setError(error.message)
-    carga.recargar()
-  }
+  const hacer = useHacer(setError, carga.recargar)
 
   const d = carga.datos
   return (
@@ -128,7 +119,7 @@ export function Pagos() {
   )
 }
 
-type Hacer = (fn: () => PromiseLike<{ error: { message: string } | null }>) => Promise<void>
+type Hacer = (fn: () => Promise<unknown>) => Promise<void>
 
 function TarjetaPrestamo({ p, cuentas, hacer }: { p: Prestamo; cuentas: Cuenta[]; hacer: Hacer }) {
   const cuenta = cuentas.find((c) => c.id === p.cuenta_id)
@@ -156,7 +147,7 @@ function TarjetaPrestamo({ p, cuentas, hacer }: { p: Prestamo; cuentas: Cuenta[]
         <button
           className="btn chico"
           disabled={p.cuotas_pagadas >= p.cuotas_total}
-          onClick={() => hacer(() => supabase.from('prestamos').update({ cuotas_pagadas: p.cuotas_pagadas + 1 }).eq('id', p.id))}
+          onClick={() => hacer(() => cambiar('prestamos', p.id, { cuotas_pagadas: p.cuotas_pagadas + 1 }))}
         >
           {p.direccion === 'debo' ? 'Pagué esta cuota' : 'Me pagó esta cuota'}
         </button>
@@ -165,14 +156,14 @@ function TarjetaPrestamo({ p, cuentas, hacer }: { p: Prestamo; cuentas: Cuenta[]
           style={{ flex: '0 1 150px' }}
           value={p.cuenta_id ?? ''}
           aria-label="Cuenta"
-          onChange={(e) => hacer(() => supabase.from('prestamos').update({ cuenta_id: e.target.value || null }).eq('id', p.id))}
+          onChange={(e) => hacer(() => cambiar('prestamos', p.id, { cuenta_id: e.target.value || null }))}
         >
           <option value="">Sin cuenta</option>
           {cuentas.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
         </select>
         <button
           className="btn peligro"
-          onClick={() => confirm(`¿Borrar "${p.nombre}"?`) && hacer(() => supabase.from('prestamos').delete().eq('id', p.id))}
+          onClick={() => confirm(`¿Borrar "${p.nombre}"?`) && hacer(() => borrar('prestamos', p.id))}
         >
           Borrar
         </button>
@@ -190,13 +181,15 @@ function NuevoPrestamo({ dir, hacer }: { dir: 'debo' | 'me_deben'; hacer: Hacer 
     e.preventDefault()
     if (!f.nombre.trim()) return
     await hacer(() =>
-      supabase.from('prestamos').insert({
+      agregarDoc('prestamos', {
         nombre: f.nombre.trim(),
         direccion: dir,
         monto_total: leerMonto(f.total),
         cuota: leerMonto(f.cuota),
         cuotas_total: Math.max(1, Number(f.cuotas) || 1),
         dia_pago: f.dia ? Number(f.dia) : null,
+        cuotas_pagadas: 0,
+        cuenta_id: null,
       }),
     )
     setF({ nombre: '', total: '', cuota: '', cuotas: '', dia: '' })

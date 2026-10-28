@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { supabase } from '../supabase'
-import { Atras, Cargando, Icono, MensajeError, cargarGrupos, inicial, leerMonto, nombreDe, useCarga, useSesion, type DatosGrupos } from '../comun'
+import * as datos from '../datos'
+import { mensaje } from '../firebase'
+import { Atras, Cargando, Icono, MensajeError, cargarGrupos, useHacer, inicial, leerMonto, nombreDe, useCarga, useSesion, type DatosGrupos } from '../comun'
 import { colones, liquidar, mesCorto, nombreMes, saldosNetos, type Transferencia } from '../dinero'
 
 // Lo que yo debo (negativo) o me deben (positivo) en un grupo.
@@ -30,10 +31,13 @@ export function Grupos() {
   async function crear(e: FormEvent) {
     e.preventDefault()
     if (!nombre.trim()) return
-    const { data, error } = await supabase.from('grupos').insert({ nombre: nombre.trim() }).select('id').single()
-    if (error) return setError(error.message)
-    setNombre('')
-    ir({ p: 'grupo', id: data.id })
+    try {
+      const nuevo = await datos.crearGrupo(nombre.trim(), yo)
+      setNombre('')
+      ir({ p: 'grupo', id: nuevo })
+    } catch (e) {
+      setError(mensaje(e))
+    }
   }
 
   const d = carga.datos
@@ -81,23 +85,11 @@ export function GrupoDetalle({ id }: { id: string }) {
   const [error, setError] = useState<string | null>(null)
   const [correo, setCorreo] = useState('')
   const [aviso, setAviso] = useState<string | null>(null)
-  const [invitaciones, setInvitaciones] = useState<string[]>([])
+  const hacer = useHacer(setError, carga.recargar)
 
   // Si el otro anota algo, se ve aquí al instante.
   useEffect(() => {
-    const canal = supabase
-      .channel(`grupo-${id}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'gastos', filter: `grupo_id=eq.${id}` }, () => carga.recargar())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'pagos', filter: `grupo_id=eq.${id}` }, () => carga.recargar())
-      .subscribe()
-    supabase
-      .from('invitaciones')
-      .select('email')
-      .eq('grupo_id', id)
-      .then(({ data }) => setInvitaciones((data ?? []).map((x: { email: string }) => x.email)))
-    return () => {
-      supabase.removeChannel(canal)
-    }
+    return datos.escucharGrupo(id, carga.recargar)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
 
@@ -117,9 +109,13 @@ export function GrupoDetalle({ id }: { id: string }) {
     const email = correo.trim().toLowerCase()
     if (!email) return
     setError(null)
-    const { error } = await supabase.from('invitaciones').insert({ grupo_id: id, email })
-    if (error) return setError(error.message.includes('duplicate') ? 'Ese correo ya estaba invitado.' : error.message)
-    setInvitaciones((l) => [...l, email])
+    if (grupo?.invitados.includes(email)) return setError('Ese correo ya estaba invitado.')
+    try {
+      await datos.invitar(id, email)
+    } catch (err) {
+      return setError(mensaje(err))
+    }
+    carga.recargar()
     setCorreo('')
     setAviso(`Listo. Cuando ${email} cree su cuenta o entre a la app, va a aparecer en este grupo.`)
   }
@@ -129,23 +125,22 @@ export function GrupoDetalle({ id }: { id: string }) {
     if (texto === null) return
     const monto = leerMonto(texto)
     if (monto <= 0) return
-    const { error } = await supabase.from('pagos').insert({ grupo_id: id, de: t.de, a: t.a, monto })
-    if (error) setError(error.message)
-    carga.recargar()
+    await hacer(() => datos.agregarPago(id, { de: t.de, a: t.a, monto, fecha: new Date().toLocaleDateString('en-CA'), nota: '' }))
   }
 
   async function borrarGasto(gid: string, desc: string) {
     if (!confirm(`¿Borrar "${desc}"? Se borra para todos en el grupo.`)) return
-    const { error } = await supabase.from('gastos').delete().eq('id', gid)
-    if (error) setError(error.message)
-    carga.recargar()
+    await hacer(() => datos.borrarGasto(id, gid))
   }
 
   async function salir() {
     if (!confirm('¿Salir de este grupo? Ya no va a ver sus gastos.')) return
-    const { error } = await supabase.from('miembros').delete().eq('grupo_id', id).eq('user_id', yo.id)
-    if (error) return setError(error.message)
-    ir({ p: 'grupos' })
+    try {
+      await datos.salirDeGrupo(id)
+      ir({ p: 'grupos' })
+    } catch (e) {
+      setError(mensaje(e))
+    }
   }
 
   if (!d || !grupo) {
@@ -256,8 +251,7 @@ export function GrupoDetalle({ id }: { id: string }) {
                   aria-label="Borrar pago"
                   onClick={async () => {
                     if (!confirm('¿Borrar este pago?')) return
-                    await supabase.from('pagos').delete().eq('id', p.id)
-                    carga.recargar()
+                    await hacer(() => datos.borrarPago(id, p.id))
                   }}
                 >
                   <Icono n="basura" t={18} />
@@ -275,7 +269,7 @@ export function GrupoDetalle({ id }: { id: string }) {
             <input className="inp chico" type="email" placeholder="correo@ejemplo.com" value={correo} onChange={(e) => setCorreo(e.target.value)} aria-label="Correo de la persona a invitar" />
             <button className="btn chico">Invitar</button>
           </div>
-          {invitaciones.length > 0 && <div className="suave peq" style={{ padding: '0 16px 12px' }}>Pendientes: {invitaciones.join(', ')}</div>}
+          {grupo.invitados.length > 0 && <div className="suave peq" style={{ padding: '0 16px 12px' }}>Pendientes: {grupo.invitados.join(', ')}</div>}
         </form>
         {aviso && <div className="aviso">{aviso}</div>}
       </div>

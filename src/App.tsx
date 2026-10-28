@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import type { Session } from '@supabase/supabase-js'
-import { configurado, supabase } from './supabase'
+import { onAuthStateChanged, signOut, type User } from 'firebase/auth'
+import { auth, configurado } from './firebase'
+import { aceptarInvitaciones, guardarPerfil, leerPerfil } from './datos'
 import { Icono, Sesion, type Vista } from './comun'
 import type { Perfil } from './tipos'
 import { Entrar } from './pantallas/Entrar'
@@ -21,15 +22,13 @@ const TABS: { p: Vista['p']; t: string; i: string }[] = [
 const TAB_DE: Partial<Record<Vista['p'], Vista['p']>> = { cuentas: 'presupuesto', grupo: 'grupos', gasto: 'grupos' }
 
 export function App() {
-  const [sesion, setSesion] = useState<Session | null | undefined>(undefined)
+  const [sesion, setSesion] = useState<User | null | undefined>(undefined)
   const [yo, setYo] = useState<Perfil | null>(null)
   const [vista, setVista] = useState<Vista>({ p: 'inicio' })
 
   useEffect(() => {
     if (!configurado) return
-    supabase.auth.getSession().then(({ data }) => setSesion(data.session))
-    const { data } = supabase.auth.onAuthStateChange((_e, s) => setSesion(s))
-    return () => data.subscription.unsubscribe()
+    return onAuthStateChanged(auth, setSesion)
   }, [])
 
   useEffect(() => {
@@ -37,15 +36,7 @@ export function App() {
       setYo(null)
       return
     }
-    const u = sesion.user
-    supabase.rpc('aceptar_invitaciones').then(() =>
-      supabase
-        .from('perfiles')
-        .select('id, nombre, email')
-        .eq('id', u.id)
-        .maybeSingle()
-        .then(({ data }) => setYo((data as Perfil | null) ?? { id: u.id, nombre: u.email ?? '', email: u.email ?? '' })),
-    )
+    cargarPerfil(sesion).then(setYo)
   }, [sesion])
 
   useEffect(() => {
@@ -56,9 +47,9 @@ export function App() {
     return (
       <div className="app">
         <div className="contenido">
-          <h1>Falta conectar Supabase</h1>
+          <h1>Falta conectar Firebase</h1>
           <p className="suave">
-            Copie <code>.env.example</code> como <code>.env.local</code>, ponga la URL y la anon key de su proyecto y vuelva a abrir la app.
+            Copie <code>.env.example</code> como <code>.env.local</code>, ponga los datos de su proyecto de Firebase y vuelva a abrir la app.
           </p>
         </div>
       </div>
@@ -70,7 +61,7 @@ export function App() {
 
   const activo = TAB_DE[vista.p] ?? vista.p
   return (
-    <Sesion.Provider value={{ yo, ir: setVista, salir: () => supabase.auth.signOut() }}>
+    <Sesion.Provider value={{ yo, ir: setVista, salir: () => signOut(auth) }}>
       <div className="app">
         {vista.p === 'inicio' && <Inicio />}
         {vista.p === 'presupuesto' && <Presupuesto />}
@@ -92,4 +83,18 @@ export function App() {
       </div>
     </Sesion.Provider>
   )
+}
+
+// Lee (o crea) el perfil y se une a los grupos donde lo invitaron.
+async function cargarPerfil(u: User): Promise<Perfil> {
+  const email = u.email ?? ''
+  let perfil = await leerPerfil(u.uid).catch(() => null)
+  if (!perfil) {
+    const nombre = sessionStorage.getItem('nombre-nuevo') || u.displayName || email.split('@')[0]
+    perfil = { id: u.uid, nombre, email }
+    await guardarPerfil(perfil).catch(() => undefined)
+    sessionStorage.removeItem('nombre-nuevo')
+  }
+  await aceptarInvitaciones(perfil).catch(() => undefined)
+  return perfil
 }

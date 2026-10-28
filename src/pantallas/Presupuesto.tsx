@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
-import { supabase, revisar } from '../supabase'
-import { Cargando, Check, Icono, MensajeError, leerMonto, useCarga, useSesion } from '../comun'
+import { agregar as agregarDoc, borrar, cambiar, listar, where } from '../datos'
+import { Cargando, Check, Icono, MensajeError, leerMonto, useCarga, useHacer, useSesion } from '../comun'
 import { colones, mesDe, moverMes, nombreMes } from '../dinero'
 import type { Cuenta, Plantilla, Renglon, Sobre, TipoRenglon } from '../tipos'
 
@@ -16,26 +16,15 @@ export function Presupuesto() {
   const [mes, setMes] = useState(mesDe(new Date()))
   const [error, setError] = useState<string | null>(null)
   const carga = useCarga(async () => {
-    const [r, c, s, p] = await Promise.all([
-      supabase.from('renglones').select('*').eq('mes', mes).order('orden').order('id'),
-      supabase.from('cuentas').select('*').order('orden'),
-      supabase.from('sobres').select('*').order('orden'),
-      supabase.from('plantillas').select('*').order('orden'),
+    const [renglones, cuentas, sobres, plantillas] = await Promise.all([
+      listar<Renglon>('renglones', where('mes', '==', mes)),
+      listar<Cuenta>('cuentas'),
+      listar<Sobre>('sobres'),
+      listar<Plantilla>('plantillas'),
     ])
-    return {
-      renglones: (revisar(r) as Renglon[]).map((x) => ({ ...x, monto: Number(x.monto) })),
-      cuentas: (revisar(c) as Cuenta[]).map((x) => ({ ...x, efectivo_suelto: Number(x.efectivo_suelto) })),
-      sobres: (revisar(s) as Sobre[]).map((x) => ({ ...x, monto: Number(x.monto) })),
-      plantillas: revisar(p) as Plantilla[],
-    }
+    return { renglones, cuentas, sobres, plantillas }
   }, [mes])
-
-  async function hacer(fn: () => PromiseLike<{ error: { message: string } | null }>) {
-    setError(null)
-    const { error } = await fn()
-    if (error) setError(error.message)
-    carga.recargar()
-  }
+  const hacer = useHacer(setError, carga.recargar)
 
   const d = carga.datos
   const entradas = d?.renglones.filter((r) => r.tipo === 'entrada').reduce((s, r) => s + r.monto, 0) ?? 0
@@ -52,7 +41,7 @@ export function Presupuesto() {
       cuenta_id: p.cuenta_id,
       orden: i,
     }))
-    await hacer(() => supabase.from('renglones').insert(filas))
+    await hacer(() => Promise.all(filas.map((f) => agregarDoc('renglones', { ...f, hecho: false, gasto_id: null }))))
   }
 
   return (
@@ -145,7 +134,7 @@ export function Presupuesto() {
   )
 }
 
-type Hacer = (fn: () => PromiseLike<{ error: { message: string } | null }>) => Promise<void>
+type Hacer = (fn: () => Promise<unknown>) => Promise<void>
 
 function Seccion(props: { tipo: TipoRenglon; titulo: string; hecho: string; renglones: Renglon[]; hacer: Hacer; mes: string }) {
   const { tipo, titulo, hecho, renglones, hacer, mes } = props
@@ -158,13 +147,16 @@ function Seccion(props: { tipo: TipoRenglon; titulo: string; hecho: string; reng
     e.preventDefault()
     if (!nombre.trim()) return
     await hacer(() =>
-      supabase.from('renglones').insert({
+      agregarDoc('renglones', {
         mes,
         tipo,
         nombre: nombre.trim(),
         monto: leerMonto(monto),
         dia_vence: dia ? Number(dia) : null,
         orden: renglones.length,
+        hecho: false,
+        cuenta_id: null,
+        gasto_id: null,
       }),
     )
     setNombre('')
@@ -184,7 +176,7 @@ function Seccion(props: { tipo: TipoRenglon; titulo: string; hecho: string; reng
             <Check
               on={r.hecho}
               etiqueta={`${hecho}: ${r.nombre}`}
-              alCambiar={() => hacer(() => supabase.from('renglones').update({ hecho: !r.hecho }).eq('id', r.id))}
+              alCambiar={() => hacer(() => cambiar('renglones', r.id, { hecho: !r.hecho }))}
             />
             <div className="crece">
               <span>{r.nombre}</span>
@@ -204,10 +196,10 @@ function Seccion(props: { tipo: TipoRenglon; titulo: string; hecho: string; reng
               aria-label={`Monto de ${r.nombre}`}
               onBlur={(e) => {
                 const n = leerMonto(e.target.value)
-                if (n !== r.monto) hacer(() => supabase.from('renglones').update({ monto: n }).eq('id', r.id))
+                if (n !== r.monto) hacer(() => cambiar('renglones', r.id, { monto: n }))
               }}
             />
-            <button className="btn peligro" aria-label={`Borrar ${r.nombre}`} onClick={() => hacer(() => supabase.from('renglones').delete().eq('id', r.id))}>
+            <button className="btn peligro" aria-label={`Borrar ${r.nombre}`} onClick={() => hacer(() => borrar('renglones', r.id))}>
               <Icono n="basura" t={18} />
             </button>
           </div>

@@ -1,7 +1,7 @@
 import type { Division, Parte } from './dinero'
 
 export type Perfil = { id: string; nombre: string; email: string }
-export type Grupo = { id: string; nombre: string; creado_por: string }
+export type Grupo = { id: string; nombre: string; creadoPor: string; miembros: string[]; nombres: Record<string, string>; invitados: string[] }
 export type Miembro = { grupo_id: string; user_id: string }
 
 export type Gasto = {

@@ -1,0 +1,56 @@
+rules_version = '2';
+
+// Presupuesto compartido · reglas de privacidad de Firestore.
+// Pegar completo en Firebase → Firestore Database → Reglas → Publicar.
+//
+// - usuarios/{uid}/...  : lo personal (cuentas, sobres, presupuesto, préstamos). Solo su dueño.
+// - grupos/{gid}        : lo compartido. Solo sus miembros; un invitado solo puede unirse a sí mismo.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function yo() {
+      return request.auth.uid;
+    }
+
+    function correo() {
+      return request.auth.token.email.lower();
+    }
+
+    match /usuarios/{uid}/{documento=**} {
+      allow read, write: if request.auth != null && yo() == uid;
+    }
+
+    match /grupos/{gid} {
+      function esMiembro() {
+        return yo() in resource.data.miembros;
+      }
+
+      function estaInvitado() {
+        return correo() in resource.data.invitados;
+      }
+
+      // Aceptar invitación: solo se agrega a sí mismo, quita su correo y pone su nombre.
+      function soloSeUne() {
+        let antes = resource.data;
+        let despues = request.resource.data;
+        return despues.diff(antes).affectedKeys().hasOnly(['miembros', 'invitados', 'nombres'])
+          && despues.miembros.toSet() == antes.miembros.toSet().union([yo()].toSet())
+          && despues.invitados.toSet() == antes.invitados.toSet().difference([correo()].toSet())
+          && despues.nombres.diff(antes.nombres).affectedKeys().hasOnly([yo()]);
+      }
+
+      allow read: if request.auth != null && (esMiembro() || estaInvitado());
+      allow create: if request.auth != null
+        && request.resource.data.creadoPor == yo()
+        && request.resource.data.miembros == [yo()];
+      allow update: if request.auth != null && (esMiembro() || (estaInvitado() && soloSeUne()));
+      allow delete: if request.auth != null && resource.data.creadoPor == yo();
+
+      match /{subcoleccion}/{id} {
+        allow read, write: if request.auth != null
+          && (subcoleccion == 'gastos' || subcoleccion == 'pagos')
+          && yo() in get(/databases/$(database)/documents/grupos/$(gid)).data.miembros;
+      }
+    }
+  }
+}

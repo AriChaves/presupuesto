@@ -1,34 +1,20 @@
 import { useState, type FormEvent } from 'react'
-import { supabase, revisar } from '../supabase'
-import { Atras, Cargando, Icono, MensajeError, leerMonto, useCarga } from '../comun'
+import { agregar as agregarDoc, borrar, cambiar, listar } from '../datos'
+import { Atras, Cargando, Icono, MensajeError, leerMonto, useCarga, useHacer } from '../comun'
 import { colones } from '../dinero'
 import type { Cuenta, Plantilla, Sobre } from '../tipos'
 
 const TIPOS_CUENTA = ['tarjeta', 'cuenta de ahorro', 'efectivo', 'otra']
 
-type Hacer = (fn: () => PromiseLike<{ error: { message: string } | null }>) => Promise<void>
+type Hacer = (fn: () => Promise<unknown>) => Promise<void>
 
 export function Cuentas() {
   const [error, setError] = useState<string | null>(null)
   const carga = useCarga(async () => {
-    const [c, s, p] = await Promise.all([
-      supabase.from('cuentas').select('*').order('orden'),
-      supabase.from('sobres').select('*').order('orden'),
-      supabase.from('plantillas').select('*').order('orden'),
-    ])
-    return {
-      cuentas: (revisar(c) as Cuenta[]).map((x) => ({ ...x, efectivo_suelto: Number(x.efectivo_suelto) })),
-      sobres: (revisar(s) as Sobre[]).map((x) => ({ ...x, monto: Number(x.monto) })),
-      plantillas: (revisar(p) as Plantilla[]).map((x) => ({ ...x, monto: Number(x.monto) })),
-    }
+    const [cuentas, sobres, plantillas] = await Promise.all([listar<Cuenta>('cuentas'), listar<Sobre>('sobres'), listar<Plantilla>('plantillas')])
+    return { cuentas, sobres, plantillas }
   }, [])
-
-  const hacer: Hacer = async (fn) => {
-    setError(null)
-    const { error } = await fn()
-    if (error) setError(error.message)
-    carga.recargar()
-  }
+  const hacer: Hacer = useHacer(setError, carga.recargar)
 
   const d = carga.datos
   return (
@@ -90,7 +76,7 @@ function CuentasSeccion({ cuentas, hacer }: { cuentas: Cuenta[]; hacer: Hacer })
   async function agregar(e: FormEvent) {
     e.preventDefault()
     if (!nombre.trim()) return
-    await hacer(() => supabase.from('cuentas').insert({ nombre: nombre.trim(), tipo, orden: cuentas.length }))
+    await hacer(() => agregarDoc('cuentas', { nombre: nombre.trim(), tipo, orden: cuentas.length }))
     setNombre('')
   }
 
@@ -106,9 +92,9 @@ function CuentasSeccion({ cuentas, hacer }: { cuentas: Cuenta[]; hacer: Hacer })
               defaultValue={c.nombre}
               aria-label="Nombre de la cuenta"
               style={{ flex: '1 1 140px' }}
-              onBlur={(e) => e.target.value.trim() && e.target.value !== c.nombre && hacer(() => supabase.from('cuentas').update({ nombre: e.target.value.trim() }).eq('id', c.id))}
+              onBlur={(e) => e.target.value.trim() && e.target.value !== c.nombre && hacer(() => cambiar('cuentas', c.id, { nombre: e.target.value.trim() }))}
             />
-            <select className="inp chico" style={{ flex: '0 1 130px' }} value={c.tipo} aria-label="Tipo" onChange={(e) => hacer(() => supabase.from('cuentas').update({ tipo: e.target.value }).eq('id', c.id))}>
+            <select className="inp chico" style={{ flex: '0 1 130px' }} value={c.tipo} aria-label="Tipo" onChange={(e) => hacer(() => cambiar('cuentas', c.id, { tipo: e.target.value }))}>
               {TIPOS_CUENTA.map((t) => (
                 <option key={t}>{t}</option>
               ))}
@@ -123,11 +109,11 @@ function CuentasSeccion({ cuentas, hacer }: { cuentas: Cuenta[]; hacer: Hacer })
                 defaultValue={c.efectivo_suelto ? c.efectivo_suelto.toLocaleString('en-US') : ''}
                 onBlur={(e) => {
                   const n = leerMonto(e.target.value)
-                  if (n !== c.efectivo_suelto) hacer(() => supabase.from('cuentas').update({ efectivo_suelto: n }).eq('id', c.id))
+                  if (n !== c.efectivo_suelto) hacer(() => cambiar('cuentas', c.id, { efectivo_suelto: n }))
                 }}
               />
             </label>
-            <Borrar etiqueta={c.nombre} alBorrar={() => hacer(() => supabase.from('cuentas').delete().eq('id', c.id))} />
+            <Borrar etiqueta={c.nombre} alBorrar={() => hacer(() => borrar('cuentas', c.id))} />
           </div>
         ))}
         <form className="form-fila" onSubmit={agregar} style={cuentas.length ? undefined : { borderTop: 'none' }}>
@@ -153,7 +139,7 @@ function SobresSeccion({ sobres, cuentas, hacer }: { sobres: Sobre[]; cuentas: C
   async function agregar(e: FormEvent) {
     e.preventDefault()
     if (!nombre.trim()) return
-    await hacer(() => supabase.from('sobres').insert({ nombre: nombre.trim(), monto: leerMonto(monto), cuenta_id: cuenta, orden: sobres.length }))
+    await hacer(() => agregarDoc('sobres', { nombre: nombre.trim(), monto: leerMonto(monto), cuenta_id: cuenta, orden: sobres.length }))
     setNombre('')
     setMonto('')
   }
@@ -173,7 +159,7 @@ function SobresSeccion({ sobres, cuentas, hacer }: { sobres: Sobre[]; cuentas: C
               defaultValue={s.nombre}
               aria-label="Nombre del sobre"
               style={{ flex: '1 1 120px' }}
-              onBlur={(e) => e.target.value.trim() && e.target.value !== s.nombre && hacer(() => supabase.from('sobres').update({ nombre: e.target.value.trim() }).eq('id', s.id))}
+              onBlur={(e) => e.target.value.trim() && e.target.value !== s.nombre && hacer(() => cambiar('sobres', s.id, { nombre: e.target.value.trim() }))}
             />
             <input
               key={s.monto}
@@ -184,11 +170,11 @@ function SobresSeccion({ sobres, cuentas, hacer }: { sobres: Sobre[]; cuentas: C
               defaultValue={s.monto ? s.monto.toLocaleString('en-US') : ''}
               onBlur={(e) => {
                 const n = leerMonto(e.target.value)
-                if (n !== s.monto) hacer(() => supabase.from('sobres').update({ monto: n }).eq('id', s.id))
+                if (n !== s.monto) hacer(() => cambiar('sobres', s.id, { monto: n }))
               }}
             />
-            <SelectCuenta valor={s.cuenta_id} cuentas={cuentas} alCambiar={(id) => hacer(() => supabase.from('sobres').update({ cuenta_id: id }).eq('id', s.id))} />
-            <Borrar etiqueta={s.nombre} alBorrar={() => hacer(() => supabase.from('sobres').delete().eq('id', s.id))} />
+            <SelectCuenta valor={s.cuenta_id} cuentas={cuentas} alCambiar={(id) => hacer(() => cambiar('sobres', s.id, { cuenta_id: id }))} />
+            <Borrar etiqueta={s.nombre} alBorrar={() => hacer(() => borrar('sobres', s.id))} />
           </div>
         ))}
         <form className="form-fila" onSubmit={agregar} style={sobres.length ? undefined : { borderTop: 'none' }}>
@@ -213,7 +199,7 @@ function PlantillasSeccion(props: { tipo: 'entrada' | 'fijo'; titulo: string; pl
     e.preventDefault()
     if (!nombre.trim()) return
     await hacer(() =>
-      supabase.from('plantillas').insert({ tipo, nombre: nombre.trim(), monto: leerMonto(monto), dia_vence: dia ? Number(dia) : null, orden: props.plantillas.length }),
+      agregarDoc('plantillas', { tipo, nombre: nombre.trim(), monto: leerMonto(monto), dia_vence: dia ? Number(dia) : null, orden: props.plantillas.length }),
     )
     setNombre('')
     setMonto('')
@@ -234,9 +220,9 @@ function PlantillasSeccion(props: { tipo: 'entrada' | 'fijo'; titulo: string; pl
               </span>
             </div>
             {tipo === 'fijo' && (
-              <SelectCuenta valor={p.cuenta_id} cuentas={cuentas} alCambiar={(id) => hacer(() => supabase.from('plantillas').update({ cuenta_id: id }).eq('id', p.id))} />
+              <SelectCuenta valor={p.cuenta_id} cuentas={cuentas} alCambiar={(id) => hacer(() => cambiar('plantillas', p.id, { cuenta_id: id }))} />
             )}
-            <Borrar etiqueta={p.nombre} alBorrar={() => hacer(() => supabase.from('plantillas').delete().eq('id', p.id))} />
+            <Borrar etiqueta={p.nombre} alBorrar={() => hacer(() => borrar('plantillas', p.id))} />
           </div>
         ))}
         <form className="form-fila" onSubmit={agregar} style={lista.length ? undefined : { borderTop: 'none' }}>

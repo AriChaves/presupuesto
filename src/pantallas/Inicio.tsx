@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { supabase, revisar } from '../supabase'
+import { listar, where } from '../datos'
 import { Cargando, Icono, MensajeError, cargarGrupos, inicial, nombreDe, useCarga, useSesion } from '../comun'
 import { colones, mesDe, nombreMes } from '../dinero'
 import type { Renglon } from '../tipos'
@@ -31,10 +31,10 @@ export function Inicio() {
   const carga = useCarga(async () => {
     const [grupos, r, venc] = await Promise.all([
       cargarGrupos(),
-      supabase.from('renglones').select('tipo, monto').eq('mes', mes),
+      listar<Renglon>('renglones', where('mes', '==', mes)),
       cargarVencimientos(),
     ])
-    return { grupos, renglones: revisar(r) as Pick<Renglon, 'tipo' | 'monto'>[], venc }
+    return { grupos, renglones: r, venc }
   }, [mes])
 
   useEffect(() => {

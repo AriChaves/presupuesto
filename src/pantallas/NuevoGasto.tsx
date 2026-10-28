@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { supabase, revisar } from '../supabase'
+import { agregar as agregarDoc, agregarGasto, listar } from '../datos'
+import { mensaje } from '../firebase'
 import { Atras, Cargando, MensajeError, cargarGrupos, leerMonto, nombreDe, useCarga, useSesion, type Vista } from '../comun'
 import { colones, dividir, mesDe, type Division } from '../dinero'
 import type { Cuenta } from '../tipos'
@@ -10,8 +11,8 @@ const CATEGORIAS = ['Comidas', 'Viajes', 'Extra']
 export function NuevoGasto({ grupoId, volver }: { grupoId?: string; volver: Vista }) {
   const { yo, ir } = useSesion()
   const carga = useCarga(async () => {
-    const [d, c] = await Promise.all([cargarGrupos(), supabase.from('cuentas').select('*').order('orden')])
-    return { ...d, cuentas: revisar(c) as Cuenta[] }
+    const [d, cuentas] = await Promise.all([cargarGrupos(), listar<Cuenta>('cuentas')])
+    return { ...d, cuentas }
   }, [])
   const [grupo, setGrupo] = useState(grupoId ?? '')
   const [monto, setMonto] = useState('')
@@ -70,34 +71,35 @@ export function NuevoGasto({ grupoId, volver }: { grupoId?: string; volver: Vist
     try {
       let gastoId: string | null = null
       if (!esPersonal) {
-        const g = revisar(
-          await supabase
-            .from('gastos')
-            .insert({ grupo_id: grupo, fecha, descripcion: desc.trim(), categoria, monto: total, pagado_por: pagador, division, medio: pagador === yo.id ? medio : '' })
-            .select('id')
-            .single(),
-        ) as { id: string }
-        gastoId = g.id
-        revisar(await supabase.from('partes').insert(partes.map((p) => ({ ...p, gasto_id: g.id }))))
+        gastoId = await agregarGasto(grupo, {
+          fecha,
+          descripcion: desc.trim(),
+          categoria,
+          monto: total,
+          pagado_por: pagador,
+          division,
+          medio: pagador === yo.id ? medio : '',
+          partes,
+        })
       }
       const montoMio = esPersonal ? total : miParte
       if ((esPersonal || anotar) && montoMio > 0) {
         const cuenta = cuentas.find((c) => c.nombre === medio)
-        revisar(
-          await supabase.from('renglones').insert({
-            mes: mesDe(new Date(fecha + 'T12:00')),
-            tipo: 'extra',
-            nombre: esPersonal ? desc.trim() : `${desc.trim()} (${grupos.find((x) => x.id === grupo)?.nombre})`,
-            monto: montoMio,
-            hecho: true,
-            cuenta_id: cuenta?.id ?? null,
-            gasto_id: gastoId,
-          }),
-        )
+        await agregarDoc('renglones', {
+          mes: mesDe(new Date(fecha + 'T12:00')),
+          tipo: 'extra',
+          nombre: esPersonal ? desc.trim() : `${desc.trim()} (${grupos.find((x) => x.id === grupo)?.nombre})`,
+          monto: montoMio,
+          hecho: true,
+          dia_vence: null,
+          cuenta_id: cuenta?.id ?? null,
+          gasto_id: gastoId,
+          orden: 999,
+        })
       }
       ir(volver)
     } catch (err) {
-      setError((err as Error).message)
+      setError(mensaje(err))
       setGuardando(false)
     }
   }

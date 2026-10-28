@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
-import { supabase, revisar } from './supabase'
+import { mensaje } from './firebase'
+import { gastosYPagos, misGrupos } from './datos'
 import type { Gasto, Grupo, Miembro, PagoGrupo, Perfil } from './tipos'
 
 // ───────────── Navegación ─────────────
@@ -27,7 +28,7 @@ export function useCarga<T>(cargar: () => Promise<T>, deps: unknown[]) {
     let vivo = true
     fn()
       .then((d) => vivo && (setDatos(d), setError(null)))
-      .catch((e: Error) => vivo && setError(e.message))
+      .catch((e: unknown) => vivo && setError(mensaje(e)))
     return () => {
       vivo = false
     }
@@ -45,24 +46,25 @@ export type DatosGrupos = {
 
 // Trae mis grupos con sus miembros, gastos y pagos.
 export async function cargarGrupos(): Promise<DatosGrupos> {
-  const grupos = revisar(await supabase.from('grupos').select('id, nombre, creado_por').order('creado_en')) as Grupo[]
-  const ids = grupos.map((g) => g.id)
-  if (ids.length === 0) return { grupos, miembros: [], perfiles: {}, gastos: [], pagos: [] }
-  const [m, g, p] = await Promise.all([
-    supabase.from('miembros').select('grupo_id, user_id').in('grupo_id', ids),
-    supabase.from('gastos').select('*, partes(user_id, monto)').in('grupo_id', ids).order('fecha', { ascending: false }),
-    supabase.from('pagos').select('*').in('grupo_id', ids).order('fecha', { ascending: false }),
-  ])
-  const miembros = revisar(m) as Miembro[]
-  const uids = [...new Set(miembros.map((x) => x.user_id))]
-  const perfilesLista = revisar(await supabase.from('perfiles').select('id, nombre, email').in('id', uids)) as Perfil[]
-  const gastos = (revisar(g) as Gasto[]).map((x) => ({
-    ...x,
-    monto: Number(x.monto),
-    partes: x.partes.map((pp) => ({ ...pp, monto: Number(pp.monto) })),
-  }))
-  const pagos = (revisar(p) as PagoGrupo[]).map((x) => ({ ...x, monto: Number(x.monto) }))
-  return { grupos, miembros, perfiles: Object.fromEntries(perfilesLista.map((x) => [x.id, x])), gastos, pagos }
+  const grupos = await misGrupos()
+  const todo = await Promise.all(grupos.map((g) => gastosYPagos(g.id)))
+  const miembros = grupos.flatMap((g) => g.miembros.map((user_id) => ({ grupo_id: g.id, user_id })))
+  const perfiles: Record<string, Perfil> = {}
+  for (const g of grupos) for (const [id, nombre] of Object.entries(g.nombres ?? {})) perfiles[id] = { id, nombre, email: '' }
+  return { grupos, miembros, perfiles, gastos: todo.flatMap((x) => x.gastos), pagos: todo.flatMap((x) => x.pagos) }
+}
+
+// Corre una escritura y muestra el error en pantalla si falla.
+export function useHacer(setError: (e: string | null) => void, recargar: () => void) {
+  return async (fn: () => Promise<unknown>) => {
+    setError(null)
+    try {
+      await fn()
+    } catch (e) {
+      setError(mensaje(e))
+    }
+    recargar()
+  }
 }
 
 export function nombreDe(perfiles: Record<string, Perfil>, id: string, yo: string): string {
