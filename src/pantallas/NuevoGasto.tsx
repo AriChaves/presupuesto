@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { agregar as agregarDoc, agregarGasto, listar } from '../datos'
 import { mensaje } from '../firebase'
 import { Atras, Cargando, MensajeError, cargarGrupos, leerMonto, nombreDe, useCarga, useSesion, type Vista } from '../comun'
-import { SIMBOLO, colones, dividir, mesDe, type Division, type Moneda } from '../dinero'
+import { SIMBOLO, colones, dividir, mesDe, moverMes, type Division, type Moneda } from '../dinero'
 import type { Cuenta } from '../tipos'
 
 const PERSONAL = 'personal'
@@ -86,14 +86,18 @@ export function NuevoGasto({ grupoId, volver }: { grupoId?: string; volver: Vist
       const montoMio = esPersonal ? total : miParte
       if ((esPersonal || anotar) && montoMio > 0) {
         const cuenta = cuentas.find((c) => c.nombre === medio)
+        // Si otra persona del grupo pagó, usted le paga el 30 de ese mes: cuenta en el presupuesto
+        // del mes siguiente, en la quincena del 30 (como los gastos fijos). Si pagó usted, va en ese mes.
+        const leDebe = !esPersonal && pagador !== yo.id
+        const mesGasto = mesDe(new Date(fecha + 'T12:00'))
         await agregarDoc('renglones', {
-          mes: mesDe(new Date(fecha + 'T12:00')),
+          mes: leDebe ? moverMes(mesGasto, 1) : mesGasto,
           tipo: 'extra',
           nombre: esPersonal ? desc.trim() : `${desc.trim()} (${grupos.find((x) => x.id === grupo)?.nombre})`,
           monto: montoMio,
           moneda: esPersonal ? moneda : 'CRC',
-          hecho: true,
-          dia_vence: null,
+          hecho: !leDebe,
+          dia_vence: leDebe ? 30 : null,
           cuenta_id: cuenta?.id ?? null,
           gasto_id: gastoId,
           grupo_id: esPersonal ? null : grupo,

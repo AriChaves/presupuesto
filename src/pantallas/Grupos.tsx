@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import * as datos from '../datos'
 import { mensaje } from '../firebase'
 import { Atras, BotonBorrar, Cargando, Icono, MensajeError, PedirMonto, cargarGrupos, useHacer, inicial, nombreDe, useCarga, useSesion, type DatosGrupos } from '../comun'
-import { colones, liquidar, mesCorto, nombreMes, saldosNetos, type Transferencia } from '../dinero'
+import { colones, liquidar, mesCorto, mesDe, moverMes, nombreMes, saldosNetos, type Transferencia } from '../dinero'
 import type { Grupo } from '../tipos'
 
 // Lo que yo debo (negativo) o me deben (positivo) en un grupo.
@@ -88,6 +88,8 @@ export function GrupoDetalle({ id }: { id: string }) {
   const [aviso, setAviso] = useState<string | null>(null)
   const hacer = useHacer(setError, carga.recargar)
   const [pagando, setPagando] = useState<string | null>(null)
+  // Cada mes se cuadra por aparte, como en el Excel (mayo, junio, … cada uno con su "Listo").
+  const [mes, setMes] = useState(mesDe(new Date()))
 
   // Si el otro anota algo, se ve aquí al instante.
   useEffect(() => {
@@ -124,7 +126,11 @@ export function GrupoDetalle({ id }: { id: string }) {
 
   async function registrarPago(t: Transferencia, monto: number) {
     setPagando(null)
-    await hacer(() => datos.agregarPago(id, { de: t.de, a: t.a, monto, fecha: new Date().toLocaleDateString('en-CA'), nota: '' }))
+    // El pago cuenta en el mes que está viendo (si es otro mes, queda con fecha del último día de ese mes).
+    const hoy = new Date()
+    const [a, m] = mes.split('-').map(Number)
+    const fecha = mes === mesDe(hoy) ? hoy.toLocaleDateString('en-CA') : `${mes}-${String(new Date(a, m, 0).getDate()).padStart(2, '0')}`
+    await hacer(() => datos.agregarPago(id, { de: t.de, a: t.a, monto, fecha, nota: '' }))
   }
 
   async function salir() {
@@ -147,14 +153,15 @@ export function GrupoDetalle({ id }: { id: string }) {
   }
 
   const miembros = d.miembros.filter((m) => m.grupo_id === id).map((m) => m.user_id)
-  const transf = transferenciasDe(d, id)
-  const gastos = d.gastos.filter((g) => g.grupo_id === id)
-  const pagos = d.pagos.filter((p) => p.grupo_id === id)
-  const porMes = new Map<string, typeof gastos>()
-  for (const g of gastos) {
-    const m = g.fecha.slice(0, 7)
-    porMes.set(m, [...(porMes.get(m) ?? []), g])
-  }
+  const todosGastos = d.gastos.filter((g) => g.grupo_id === id)
+  const todosPagos = d.pagos.filter((p) => p.grupo_id === id)
+  const gastos = todosGastos.filter((g) => g.fecha.startsWith(mes))
+  const pagos = todosPagos.filter((p) => p.fecha.startsWith(mes))
+  const transf = liquidar(saldosNetos(gastos, pagos))
+  // Meses con movimiento, para ver de un vistazo cuáles están listos y cuáles pendientes.
+  const meses = [...new Set([...todosGastos, ...todosPagos].map((x) => x.fecha.slice(0, 7)))].sort()
+  const pendiente = (m: string) =>
+    liquidar(saldosNetos(todosGastos.filter((g) => g.fecha.startsWith(m)), todosPagos.filter((p) => p.fecha.startsWith(m)))).length > 0
   const nombre = (uid: string) => nombreDe(d.perfiles, uid, yo.id)
 
   return (
@@ -168,9 +175,49 @@ export function GrupoDetalle({ id }: { id: string }) {
       </div>
       <MensajeError texto={error ?? carga.error} />
 
+      <div className="mes-nav">
+        <button aria-label="Mes anterior" onClick={() => setMes(moverMes(mes, -1))}>‹</button>
+        <strong>{nombreMes(mes)}</strong>
+        <button aria-label="Mes siguiente" onClick={() => setMes(moverMes(mes, 1))}>›</button>
+      </div>
+
+      {meses.length > 0 && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {meses.map((m) => {
+            const listo = !pendiente(m)
+            const actual = m === mes
+            return (
+              <button
+                key={m}
+                onClick={() => setMes(m)}
+                aria-current={actual ? 'true' : undefined}
+                style={{
+                  minHeight: 44,
+                  minWidth: 64,
+                  borderRadius: 12,
+                  border: `1px solid ${actual ? 'var(--tinta)' : listo ? 'var(--verde-claro)' : '#E8C4AC'}`,
+                  background: actual ? 'var(--tinta)' : listo ? 'var(--verde-claro)' : '#FBF3EE',
+                  color: actual ? '#fff' : listo ? 'var(--verde)' : 'var(--debe)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: '4px 10px',
+                  cursor: 'pointer',
+                  font: 'inherit',
+                }}
+              >
+                <span style={{ fontSize: 13, fontWeight: 500 }}>{nombreMes(m, false).slice(0, 3)}</span>
+                <span style={{ fontSize: 11 }}>{listo ? 'Listo' : 'Pendiente'}</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+
       <div className="card pad">
-        <span className="lbl">Saldos</span>
-        {transf.length === 0 && <span className="suave">Están al día.</span>}
+        <span className="lbl">Saldo de {nombreMes(mes, false).toLowerCase()}</span>
+        {transf.length === 0 && <span className="suave">{gastos.length ? 'Están al día este mes.' : 'No hay gastos este mes.'}</span>}
         {transf.map((t) => {
           const texto =
             t.de === yo.id ? (
@@ -199,14 +246,14 @@ export function GrupoDetalle({ id }: { id: string }) {
         <Icono n="mas" t={18} /> Agregar gasto compartido
       </button>
 
-      {[...porMes.entries()].map(([mes, lista]) => (
-        <div className="seccion" key={mes}>
+      {gastos.length > 0 && (
+        <div className="seccion">
           <div className="seccion-titulo">
-            <span className="lbl">{nombreMes(mes)}</span>
-            <span className="suave peq num">{colones(lista.reduce((s, g) => s + g.monto, 0))}</span>
+            <span className="lbl">Gastos de {nombreMes(mes, false).toLowerCase()}</span>
+            <span className="suave peq num">{colones(gastos.reduce((s, g) => s + g.monto, 0))}</span>
           </div>
           <div className="card">
-            {lista.map((g) => {
+            {gastos.map((g) => {
               const mia = g.partes.find((p) => p.user_id === yo.id)?.monto ?? 0
               return (
                 <div className="fila" key={g.id}>
@@ -227,12 +274,11 @@ export function GrupoDetalle({ id }: { id: string }) {
             })}
           </div>
         </div>
-      ))}
-      {gastos.length === 0 && <div className="vacio">Todavía no hay gastos en este grupo.</div>}
+      )}
 
       {pagos.length > 0 && (
         <div className="seccion">
-          <span className="lbl">Pagos entre ustedes</span>
+          <span className="lbl">Pagos de {nombreMes(mes, false).toLowerCase()}</span>
           <div className="card">
             {pagos.map((p) => (
               <div className="fila" key={p.id}>

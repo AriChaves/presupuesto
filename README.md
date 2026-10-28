@@ -42,6 +42,22 @@ Abra la dirección que sale (`http://localhost:5173`). Para probarla en el celul
 - Avisos con la app cerrada (ahora el aviso sale al abrir la app).
 - Publicarla en internet (Firebase Hosting, también gratis) para usarla sin la compu.
 
+## APK para Android
+
+La app de Android es la misma app web dentro de Capacitor (carpeta `android/`).
+
+```bash
+npm run build:android
+```
+
+```bash
+cd android && set JAVA_HOME=C:\Users\Ari\.jdks\jbr-21.0.11 && gradlew.bat assembleDebug
+```
+
+El APK sale en `android/app/build/outputs/apk/debug/app-debug.apk`. Usa Java 21: con el Java 25 de Android Studio, Gradle falla con *"Unsupported class file major version 69"*.
+
+Para instalarlo, páselo al celular y ábralo; Android pide permitir "instalar apps de origen desconocido" la primera vez.
+
 ## Comandos
 
 - `npm run dev` — app en modo desarrollo

@@ -35,7 +35,19 @@ export type Sobre = { id: string; nombre: string; monto: number; cuenta_id: stri
 
 // 'cambio': pasar plata de una moneda a otra. Va en pareja (sale de una, entra en la otra) con el mismo cambio_id.
 export type TipoRenglon = 'entrada' | 'fijo' | 'extra' | 'transporte' | 'cambio'
-export type Plantilla = { id: string; tipo: 'entrada' | 'fijo'; nombre: string; monto: number; dia_vence: number | null; cuenta_id: string | null; orden: number; moneda?: Moneda }
+// 'transporte': lo de cada semana (bus y uber) con que se arman las semanas de cada mes.
+export type Plantilla = {
+  id: string
+  tipo: 'entrada' | 'fijo' | 'transporte'
+  nombre: string
+  monto: number
+  dia_vence: number | null
+  cuenta_id: string | null
+  orden: number
+  moneda?: Moneda
+  bus?: number
+  uber?: number
+}
 export type Renglon = {
   id: string
   mes: string
@@ -50,6 +62,9 @@ export type Renglon = {
   moneda?: Moneda
   cambio_id?: string
   grupo_id?: string
+  // Transporte por semana: monto = bus + uber.
+  bus?: number
+  uber?: number
 }
 
 export type Prestamo = {

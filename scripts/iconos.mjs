@@ -43,3 +43,19 @@ function png(size) {
 writeFileSync('public/icon-192.png', png(192))
 writeFileSync('public/icon-512.png', png(512))
 writeFileSync('public/apple-touch-icon.png', png(180))
+
+// Íconos de la app de Android (si ya existe el proyecto de Capacitor).
+import { existsSync } from 'node:fs'
+const res = 'android/app/src/main/res'
+if (existsSync(res)) {
+  const densidades = { mdpi: 48, hdpi: 72, xhdpi: 96, xxhdpi: 144, xxxhdpi: 192 }
+  for (const [d, t] of Object.entries(densidades)) {
+    writeFileSync(`${res}/mipmap-${d}/ic_launcher.png`, png(t))
+    writeFileSync(`${res}/mipmap-${d}/ic_launcher_round.png`, png(t))
+    writeFileSync(`${res}/mipmap-${d}/ic_launcher_foreground.png`, png(Math.round(t * 2.25)))
+  }
+  writeFileSync(
+    `${res}/values/ic_launcher_background.xml`,
+    '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <color name="ic_launcher_background">#1F6F4A</color>\n</resources>\n',
+  )
+}

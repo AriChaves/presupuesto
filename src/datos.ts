@@ -151,3 +151,24 @@ export async function cargarArrastre(mes: string): Promise<PorMoneda> {
   const anteriores = await listar<Renglon>('renglones', where('mes', '>=', desde), where('mes', '<', mes))
   return { CRC: sobranteArrastrado(anteriores, desde, mes, 'CRC'), USD: sobranteArrastrado(anteriores, desde, mes, 'USD') }
 }
+
+// Tipo de cambio de ARi que escribió la última vez (colones por dólar).
+export type TipoARi = { compra: number; venta: number }
+
+export async function leerTipoARi(): Promise<TipoARi | null> {
+  const s = await getDoc(doc(db, 'usuarios', uid()))
+  return (s.data()?.tipoARi as TipoARi | undefined) ?? null
+}
+
+export const guardarTipoARi = (tipoARi: TipoARi) => setDoc(doc(db, 'usuarios', uid()), { tipoARi }, { merge: true })
+
+// Meses a los que ya se les puso solo lo de cada mes (gastos fijos, transporte), para no volver
+// a ponerlo si después lo borra.
+export type Puesto = 'fijosPuestos' | 'transportePuesto'
+
+export async function yaPuesto(mes: string, que: Puesto): Promise<boolean> {
+  const s = await getDoc(doc(db, 'usuarios', uid()))
+  return Boolean(s.data()?.[que]?.[mes])
+}
+
+export const marcarPuesto = (mes: string, que: Puesto) => setDoc(doc(db, 'usuarios', uid()), { [que]: { [mes]: true } }, { merge: true })

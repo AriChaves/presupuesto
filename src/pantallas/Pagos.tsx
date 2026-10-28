@@ -1,27 +1,35 @@
 import { useState, type FormEvent } from 'react'
 import { agregar as agregarDoc, borrar, cambiar, listar, misGrupos, where } from '../datos'
 import { BotonBorrar, Cargando, MensajeError, leerMonto, useCarga, useHacer, useSesion } from '../comun'
-import { colones, dinero, mesDe, proximosPagos, type ProximoPago, type Vencimiento } from '../dinero'
+import { colones, dinero, fechaQuincena, mesDe, moverMes, proximosPagos, textoFecha, type ProximoPago, type Vencimiento } from '../dinero'
 import type { Cuenta, Prestamo, Renglon } from '../tipos'
 
 // Gastos fijos sin pagar este mes + cuotas de préstamos que debo.
 export async function cargarVencimientos(): Promise<ProximoPago[]> {
-  const [renglones, prestamos, grupos] = await Promise.all([
-    listar<Renglon>('renglones', where('mes', '==', mesDe(new Date()))),
+  const hoy = new Date()
+  const mes = mesDe(hoy)
+  // El mes que viene también: su quincena del 30 cae a fin de este mes.
+  const [renglones, siguiente, prestamos, grupos] = await Promise.all([
+    listar<Renglon>('renglones', where('mes', '==', mes)),
+    listar<Renglon>('renglones', where('mes', '==', moverMes(mes, 1))),
     listar<Prestamo>('prestamos'),
     misGrupos(),
   ])
-  const pendientes = renglones.filter((x) => !x.hecho && x.dia_vence)
+  // Gastos fijos y lo que se le debe a un grupo: por quincena (30 del mes anterior o 15 del mes). Lo demás: ese día de su mes.
+  const fechaDe = (x: Renglon) =>
+    x.tipo === 'fijo' || x.grupo_id ? fechaQuincena(x.mes, x.dia_vence!) : new Date(Number(x.mes.slice(0, 4)), Number(x.mes.slice(5)) - 1, x.dia_vence!)
+  const limite = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0)
+  const pendientes = [...renglones, ...siguiente].filter((x) => !x.hecho && x.dia_vence && fechaDe(x) <= limite)
   // Lo de un grupo se paga junto: una sola línea por grupo, día y moneda.
   const juntos = new Map<string, Vencimiento>()
   for (const x of pendientes.filter((x) => x.grupo_id)) {
-    const clave = `${x.grupo_id}-${x.dia_vence}-${x.moneda ?? 'CRC'}`
+    const clave = `${x.grupo_id}-${x.mes}-${x.dia_vence}-${x.moneda ?? 'CRC'}`
     const nombre = `Pagar lo de ${grupos.find((g) => g.id === x.grupo_id)?.nombre ?? 'grupo'}`
     const antes = juntos.get(clave)
-    juntos.set(clave, { nombre, monto: (antes?.monto ?? 0) + x.monto, moneda: x.moneda, dia: x.dia_vence! })
+    juntos.set(clave, { nombre, monto: (antes?.monto ?? 0) + x.monto, moneda: x.moneda, dia: x.dia_vence!, fecha: fechaDe(x) })
   }
   const items: Vencimiento[] = [
-    ...pendientes.filter((x) => !x.grupo_id).map((x) => ({ nombre: x.nombre, monto: x.monto, moneda: x.moneda, dia: x.dia_vence! })),
+    ...pendientes.filter((x) => !x.grupo_id).map((x) => ({ nombre: x.nombre, monto: x.monto, moneda: x.moneda, dia: x.dia_vence!, fecha: fechaDe(x) })),
     ...juntos.values(),
     ...prestamos
       .filter((x) => x.direccion === 'debo' && x.dia_pago && x.cuotas_pagadas < x.cuotas_total)
@@ -39,6 +47,7 @@ export function ListaPagos({ pagos, max }: { pagos: ProximoPago[]; max?: number 
         <div className="fila" key={i}>
           <div style={{ width: 40, display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0 }}>
             <strong className={`num ${p.dias < 0 ? 'debe' : ''}`} style={{ fontSize: 18 }}>{p.fecha.getDate()}</strong>
+            <span className="suave" style={{ fontSize: 11 }}>{textoFecha(p.fecha).split(' ')[1]}</span>
           </div>
           <div className="crece">
             <span>{p.nombre}</span>

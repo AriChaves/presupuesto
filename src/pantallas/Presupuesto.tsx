@@ -1,7 +1,8 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
-import { agregar as agregarDoc, borrar, cambiar, cargarArrastre, listar, misGrupos, where } from '../datos'
-import { BotonBorrar, Cargando, Check, Icono, MensajeError, SelectMoneda, leerMonto, useCarga, useHacer, useSesion } from '../comun'
-import { MONEDAS, SIMBOLO, colonesQueFaltan, convertir, dinero, dolaresParaCambiar, mesDe, moverMes, nombreMes, resumenMes, sumarPorMoneda, textoMonedas, ultimoTipoDeCambio, type Moneda, type PorMoneda } from '../dinero'
+import { agregar as agregarDoc, borrar, cambiar, cargarArrastre, leerDesdeMes, listar, marcarPuesto, misGrupos, where, yaPuesto } from '../datos'
+import { PlantillasSeccion } from './Cuentas'
+import { BotonBorrar, Cargando, Check, Icono, MensajeError, SelectMoneda, SelectQuincena, leerMonto, useCarga, useHacer, useSesion } from '../comun'
+import { MONEDAS, SIMBOLO, colonesQueFaltan, convertir, dinero, fechaQuincena, textoFecha, dolaresParaCambiar, mesDe, moverMes, nombreMes, resumenMes, sumarPorMoneda, textoMonedas, ultimoTipoDeCambio, type Moneda, type PorMoneda } from '../dinero'
 import type { Cuenta, Plantilla, Renglon, Sobre, TipoRenglon } from '../tipos'
 
 const SECCIONES: { tipo: TipoRenglon; titulo: string; hecho: string }[] = [
@@ -15,7 +16,9 @@ export function Presupuesto() {
   const { ir } = useSesion()
   const [mes, setMes] = useState(mesDe(new Date()))
   const [error, setError] = useState<string | null>(null)
+  const [verPlantilla, setVerPlantilla] = useState(false)
   const carga = useCarga(async () => {
+    await ponerFijosSolos(mes)
     const [renglones, cuentas, sobres, plantillas, arrastre, grupos, cambios] = await Promise.all([
       listar<Renglon>('renglones', where('mes', '==', mes)),
       listar<Cuenta>('cuentas'),
@@ -34,9 +37,13 @@ export function Presupuesto() {
   const resumen = (m: Moneda) => resumenMes(d?.renglones ?? [], m, d?.arrastre[m] ?? 0)
   const hayDolares = Boolean(d && (d.renglones.some((r) => r.moneda === 'USD') || d.arrastre.USD !== 0))
 
+  // Plantillas cuyo tipo (entradas o gastos fijos) todavía no tiene nada en este mes.
+  const faltanPlantillas = d ? d.plantillas.filter((p) => p.tipo !== 'transporte' && !d.renglones.some((r) => r.tipo === p.tipo)) : []
+  const tiposQueFaltan = [...new Set(faltanPlantillas.map((p) => (p.tipo === 'fijo' ? 'gastos fijos' : 'entradas')))].join(' y ')
+
   async function llenarDesdePlantillas() {
     if (!d) return
-    const filas = d.plantillas.map((p, i) => ({
+    const filas = faltanPlantillas.map((p, i) => ({
       mes,
       tipo: p.tipo,
       nombre: p.nombre,
@@ -90,12 +97,12 @@ export function Presupuesto() {
             )
           })}
 
-          {d.renglones.length === 0 && (
+          {(faltanPlantillas.length > 0 || (d.renglones.length === 0 && d.plantillas.length === 0)) && (
             <div className="card pad">
-              <span>Este mes está vacío.</span>
-              {d.plantillas.length > 0 ? (
+              <span>{d.renglones.length === 0 ? 'Este mes está vacío.' : `Este mes todavía no tiene sus ${tiposQueFaltan}.`}</span>
+              {faltanPlantillas.length > 0 ? (
                 <button className="btn verde" onClick={llenarDesdePlantillas}>
-                  Llenar con mis entradas y gastos fijos
+                  Agregar mis {tiposQueFaltan} de cada mes
                 </button>
               ) : (
                 <span className="suave peq">
@@ -131,6 +138,18 @@ export function Presupuesto() {
               }
             />
           ))}
+
+          <div className="seccion">
+            <button className="btn borde btn-ancho" onClick={() => setVerPlantilla(!verPlantilla)} aria-expanded={verPlantilla}>
+              {verPlantilla ? 'Ocultar' : 'Editar'} mis gastos fijos y transporte de cada mes
+            </button>
+          </div>
+          {verPlantilla && (
+            <>
+              <PlantillasSeccion tipo="fijo" titulo="Gastos fijos de cada mes" plantillas={d.plantillas} cuentas={d.cuentas} hacer={hacer} />
+              <TransporteDeCadaSemana plantilla={d.plantillas.find((p) => p.tipo === 'transporte')} hacer={hacer} />
+            </>
+          )}
 
           <div className="seccion">
             <div className="seccion-titulo">
@@ -236,6 +255,7 @@ function Seccion(props: {
         <span className="lbl">{titulo}</span>
         <span className="suave peq num">{igual ? textoMonedas(total) : `${textoMonedas(recibido)} de ${textoMonedas(total)}`}</span>
       </div>
+      {tipo === 'fijo' && <PorQuincena renglones={renglones} mes={mes} />}
       <div className="card">
         {MONEDAS.filter((m) => arrastre[m] !== 0).map((m) => (
           <div className="fila" key={m}>
@@ -252,58 +272,71 @@ function Seccion(props: {
           </div>
         ))}
         {[...porGrupo.entries()].map(([gid, lista]) => (
-          <LineaGrupo key={gid} nombre={grupos[gid] ?? 'Grupo'} lista={lista} hecho={hecho} hacer={hacer} />
+          <LineaGrupo key={gid} nombre={grupos[gid] ?? 'Grupo'} lista={lista} hecho={hecho} hacer={hacer} mes={mes} />
         ))}
-        {sueltos.map((r) => (
-          <div className="fila" key={r.id}>
-            <Check
-              on={r.hecho}
-              etiqueta={`${hecho}: ${r.nombre}`}
-              alCambiar={() => hacer(() => cambiar('renglones', r.id, { hecho: !r.hecho }))}
-            />
-            <div className="crece">
-              <span>{r.nombre}</span>
-              {r.dia_vence && (
-                <span className="suave peq">
-                  {r.hecho ? hecho : 'Vence'} · día {r.dia_vence}
-                </span>
-              )}
-              {r.gasto_id && <span className="chip">Viene de un grupo</span>}
+        {tipo === 'transporte' ? (
+          <Semanas renglones={sueltos} hacer={hacer} mes={mes} hecho={hecho} />
+        ) : (
+          <>
+          {sueltos.map((r) => (
+            <div className="fila" key={r.id}>
+              <Check
+                on={r.hecho}
+                etiqueta={`${hecho}: ${r.nombre}`}
+                alCambiar={() => hacer(() => cambiar('renglones', r.id, { hecho: !r.hecho }))}
+              />
+              <div className="crece">
+                <span>{r.nombre}</span>
+                {tipo === 'fijo' ? (
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <SelectQuincena dia={r.dia_vence} etiqueta={r.nombre} mes={mes} alCambiar={(dia) => hacer(() => cambiar('renglones', r.id, { dia_vence: dia }))} />
+                    {r.hecho && <span className="suave peq">{hecho}</span>}
+                  </span>
+                ) : (
+                  r.dia_vence && (
+                    <span className="suave peq">
+                      {r.hecho ? hecho : 'Vence'} · día {r.dia_vence}
+                    </span>
+                  )
+                )}
+                {r.gasto_id && <span className="chip">Viene de un grupo</span>}
+              </div>
+              <button
+                className="btn chico borde"
+                style={{ width: 36, padding: 0, flexShrink: 0 }}
+                aria-label={`Moneda de ${r.nombre}: ${r.moneda === 'USD' ? 'dólares' : 'colones'}. Tocar para cambiar`}
+                onClick={() => hacer(() => cambiar('renglones', r.id, { moneda: r.moneda === 'USD' ? 'CRC' : 'USD' }))}
+              >
+                {SIMBOLO[r.moneda ?? 'CRC']}
+              </button>
+              <input
+                className="inp chico num"
+                style={{ width: 110, textAlign: 'right' }}
+                key={r.monto}
+                defaultValue={r.monto ? r.monto.toLocaleString('en-US') : ''}
+                inputMode="decimal"
+                aria-label={`Monto de ${r.nombre}`}
+                onBlur={(e) => {
+                  const n = leerMonto(e.target.value)
+                  if (n !== r.monto) hacer(() => cambiar('renglones', r.id, { monto: n }))
+                }}
+              />
+              <button className="btn peligro" aria-label={`Borrar ${r.nombre}`} onClick={() => hacer(() => borrar('renglones', r.id))}>
+                <Icono n="basura" t={18} />
+              </button>
             </div>
-            <button
-              className="btn chico borde"
-              style={{ width: 36, padding: 0, flexShrink: 0 }}
-              aria-label={`Moneda de ${r.nombre}: ${r.moneda === 'USD' ? 'dólares' : 'colones'}. Tocar para cambiar`}
-              onClick={() => hacer(() => cambiar('renglones', r.id, { moneda: r.moneda === 'USD' ? 'CRC' : 'USD' }))}
-            >
-              {SIMBOLO[r.moneda ?? 'CRC']}
-            </button>
-            <input
-              className="inp chico num"
-              style={{ width: 110, textAlign: 'right' }}
-              key={r.monto}
-              defaultValue={r.monto ? r.monto.toLocaleString('en-US') : ''}
-              inputMode="decimal"
-              aria-label={`Monto de ${r.nombre}`}
-              onBlur={(e) => {
-                const n = leerMonto(e.target.value)
-                if (n !== r.monto) hacer(() => cambiar('renglones', r.id, { monto: n }))
-              }}
-            />
-            <button className="btn peligro" aria-label={`Borrar ${r.nombre}`} onClick={() => hacer(() => borrar('renglones', r.id))}>
-              <Icono n="basura" t={18} />
-            </button>
-          </div>
-        ))}
-        <form className="form-fila" onSubmit={agregar} style={renglones.length ? undefined : { borderTop: 'none' }}>
-          <input className="inp chico" placeholder="Nuevo…" value={nombre} onChange={(e) => setNombre(e.target.value)} aria-label="Nombre" />
-          <SelectMoneda valor={moneda} alCambiar={setMoneda} />
-          <input className="inp chico num" placeholder={SIMBOLO[moneda]} value={monto} onChange={(e) => setMonto(e.target.value)} inputMode="decimal" style={{ flex: '0 1 110px' }} aria-label="Monto" />
-          {tipo === 'fijo' && (
-            <input className="inp chico" placeholder="Día" value={dia} onChange={(e) => setDia(e.target.value.replace(/\D/g, '').slice(0, 2))} inputMode="numeric" style={{ flex: '0 1 64px' }} aria-label="Día que vence" />
-          )}
-          <button className="btn chico">Agregar</button>
-        </form>
+          ))}
+          <form className="form-fila" onSubmit={agregar} style={renglones.length ? undefined : { borderTop: 'none' }}>
+            <input className="inp chico" placeholder="Nuevo…" value={nombre} onChange={(e) => setNombre(e.target.value)} aria-label="Nombre" />
+            <SelectMoneda valor={moneda} alCambiar={setMoneda} />
+            <input className="inp chico num" placeholder={SIMBOLO[moneda]} value={monto} onChange={(e) => setMonto(e.target.value)} inputMode="decimal" style={{ flex: '0 1 110px' }} aria-label="Monto" />
+            {tipo === 'fijo' && (
+              <input className="inp chico" placeholder="Día" value={dia} onChange={(e) => setDia(e.target.value.replace(/\D/g, '').slice(0, 2))} inputMode="numeric" style={{ flex: '0 1 64px' }} aria-label="Día que vence" />
+            )}
+            <button className="btn chico">Agregar</button>
+          </form>
+          </>
+        )}
         {pie}
       </div>
     </div>
@@ -426,7 +459,7 @@ function Cambios(props: { renglones: Renglon[]; hacer: Hacer; mes: string; falta
 }
 
 // Su parte de los gastos de un grupo: una línea con el total, y el detalle al tocar "Ver".
-function LineaGrupo({ nombre, lista, hecho, hacer }: { nombre: string; lista: Renglon[]; hecho: string; hacer: Hacer }) {
+function LineaGrupo({ nombre, lista, hecho, hacer, mes }: { nombre: string; lista: Renglon[]; hecho: string; hacer: Hacer; mes: string }) {
   const [abierto, setAbierto] = useState(false)
   const todos = lista.every((r) => r.hecho)
   const dias = [...new Set(lista.filter((r) => !r.hecho && r.dia_vence).map((r) => r.dia_vence))]
@@ -446,7 +479,7 @@ function LineaGrupo({ nombre, lista, hecho, hacer }: { nombre: string; lista: Re
           <span className="suave peq">
             Su parte de lo compartido
             {pendientes > 0 && pendientes < lista.length ? ` · ${pendientes} sin pagar` : ''}
-            {dias.length ? ` · vence día ${dias.join(', ')}` : ''}
+            {dias.length ? ` · se paga el ${dias.map((dia) => textoFecha(fechaQuincena(mes, dia!))).join(' y el ')}` : ''}
           </span>
         </div>
         <strong className="num">{textoMonedas(sumarPorMoneda(lista))}</strong>
@@ -463,5 +496,197 @@ function LineaGrupo({ nombre, lista, hecho, hacer }: { nombre: string; lista: Re
           </div>
         ))}
     </>
+  )
+}
+
+// Cuánto falta pagar en cada quincena (lo que hay que sacar el 15 y el 30).
+function PorQuincena({ renglones, mes }: { renglones: Renglon[]; mes: string }) {
+  const pendientes = renglones.filter((r) => !r.hecho)
+  const de = (f: (r: Renglon) => boolean) => sumarPorMoneda(pendientes.filter(f))
+  const q15 = de((r) => r.dia_vence !== null && r.dia_vence !== undefined && r.dia_vence <= 15)
+  const q30 = de((r) => r.dia_vence !== null && r.dia_vence !== undefined && r.dia_vence > 15)
+  const sin = de((r) => !r.dia_vence)
+  const hay = (t: PorMoneda) => t.CRC !== 0 || t.USD !== 0
+  if (!hay(q15) && !hay(q30) && !hay(sin)) return null
+  return (
+    <div className="num peq" style={{ display: 'flex', gap: 12, flexWrap: 'wrap', color: 'var(--azul)' }}>
+      <span>Falta pagar:</span>
+      {hay(q30) && <span>el {textoFecha(fechaQuincena(mes, 30))} · <strong>{textoMonedas(q30)}</strong></span>}
+      {hay(q15) && <span>el {textoFecha(fechaQuincena(mes, 15))} · <strong>{textoMonedas(q15)}</strong></span>}
+      {hay(sin) && <span className="suave">sin quincena · {textoMonedas(sin)}</span>}
+    </div>
+  )
+}
+
+// Transporte como en el Excel: una fila por semana con bus y Uber; el total se calcula solo.
+function Semanas({ renglones, hacer, mes, hecho }: { renglones: Renglon[]; hacer: Hacer; mes: string; hecho: string }) {
+  const filas = renglones.map((r) => {
+    const bus = r.bus ?? 0
+    const uber = r.uber ?? r.monto - bus
+    return { r, bus, uber }
+  })
+  const suma = (k: 'bus' | 'uber') => filas.reduce((s, f) => s + f[k], 0)
+  const columnas = '26px minmax(44px, 1fr) 70px 70px 72px 28px'
+
+  function guardar(r: Renglon, bus: number, uber: number) {
+    if (bus === (r.bus ?? 0) && uber === (r.uber ?? r.monto - (r.bus ?? 0))) return
+    hacer(() => cambiar('renglones', r.id, { bus, uber, monto: bus + uber }))
+  }
+
+  function nuevaSemana(n: number) {
+    return agregarDoc('renglones', { mes, tipo: 'transporte', nombre: `Semana ${n}`, bus: 0, uber: 0, monto: 0, moneda: 'CRC', hecho: false, dia_vence: null, cuenta_id: null, gasto_id: null, orden: n })
+  }
+
+  const celda = (r: Renglon, valor: number, campo: 'bus' | 'uber', otro: number) => (
+    <input
+      key={`${r.id}-${campo}-${valor}`}
+      className="inp chico num"
+      style={{ width: '100%', textAlign: 'right', padding: '0 6px' }}
+      inputMode="decimal"
+      defaultValue={valor ? valor.toLocaleString('en-US') : ''}
+      placeholder="₡0"
+      aria-label={`${campo === 'bus' ? 'Bus' : 'Uber'} de ${r.nombre}`}
+      onBlur={(e) => {
+        const n = leerMonto(e.target.value)
+        guardar(r, campo === 'bus' ? n : otro, campo === 'uber' ? n : otro)
+      }}
+    />
+  )
+
+  return (
+    <>
+      {filas.length > 0 && (
+        <div className="suave peq" style={{ display: 'grid', gridTemplateColumns: columnas, gap: 6, padding: '10px 16px 0', alignItems: 'center' }}>
+          <span />
+          <span>Semana</span>
+          <span style={{ textAlign: 'right' }}>Bus</span>
+          <span style={{ textAlign: 'right' }}>Uber</span>
+          <span style={{ textAlign: 'right' }}>Total</span>
+          <span />
+        </div>
+      )}
+      {filas.map(({ r, bus, uber }) => (
+        <div key={r.id} style={{ display: 'grid', gridTemplateColumns: columnas, gap: 6, padding: '8px 16px', alignItems: 'center', borderBottom: '1px solid var(--linea2)' }}>
+          <Check on={r.hecho} etiqueta={`${hecho}: ${r.nombre}`} alCambiar={() => hacer(() => cambiar('renglones', r.id, { hecho: !r.hecho }))} />
+          <span style={{ fontSize: 14 }}>{r.nombre.replace(/ ·.*/, '').replace('Semana ', 'Sem. ')}</span>
+          {celda(r, bus, 'bus', uber)}
+          {celda(r, uber, 'uber', bus)}
+          <strong className="num" style={{ textAlign: 'right', fontSize: 14 }}>{dinero(bus + uber)}</strong>
+          <button className="btn peligro" style={{ padding: 0, minHeight: 36 }} aria-label={`Borrar ${r.nombre}`} onClick={() => hacer(() => borrar('renglones', r.id))}>
+            <Icono n="basura" t={16} />
+          </button>
+        </div>
+      ))}
+      {filas.length > 0 && (
+        <div className="num" style={{ display: 'grid', gridTemplateColumns: columnas, gap: 6, padding: '10px 16px', alignItems: 'center', fontSize: 14 }}>
+          <span />
+          <strong>Total</strong>
+          <strong style={{ textAlign: 'right' }}>{dinero(suma('bus'))}</strong>
+          <strong style={{ textAlign: 'right' }}>{dinero(suma('uber'))}</strong>
+          <strong style={{ textAlign: 'right' }}>{dinero(suma('bus') + suma('uber'))}</strong>
+          <span />
+        </div>
+      )}
+      <div className="form-fila" style={filas.length ? undefined : { borderTop: 'none' }}>
+        {filas.length === 0 ? (
+          <button className="btn chico verde" onClick={() => hacer(() => Promise.all([1, 2, 3, 4, 5].map(nuevaSemana)))}>
+            Agregar las 5 semanas
+          </button>
+        ) : (
+          <button className="btn chico" onClick={() => hacer(() => nuevaSemana(filas.length + 1))}>
+            + Semana {filas.length + 1}
+          </button>
+        )}
+      </div>
+    </>
+  )
+}
+
+// Desde el mes en que empezó (noviembre), cada mes trae sus gastos fijos de la plantilla sin tocar nada.
+// Solo una vez por mes: si después borra alguno, no vuelve a aparecer.
+const poniendo = new Map<string, Promise<void>>()
+function ponerFijosSolos(mes: string): Promise<void> {
+  // Si ya se está poniendo este mes (la pantalla cargó dos veces), espera esa misma vez.
+  if (!poniendo.has(mes)) poniendo.set(mes, ponerFijos(mes).finally(() => poniendo.delete(mes)))
+  return poniendo.get(mes)!
+}
+
+async function ponerFijos(mes: string) {
+  const desde = (await leerDesdeMes()) ?? mesDe(new Date())
+  if (mes < desde) return
+  const [fijosListos, transporteListo] = await Promise.all([yaPuesto(mes, 'fijosPuestos'), yaPuesto(mes, 'transportePuesto')])
+  if (fijosListos && transporteListo) return
+  const [renglones, plantillas] = await Promise.all([listar<Renglon>('renglones', where('mes', '==', mes)), listar<Plantilla>('plantillas')])
+  const base = { mes, hecho: false, gasto_id: null, cuenta_id: null }
+
+  const fijos = plantillas.filter((p) => p.tipo === 'fijo')
+  if (!fijosListos && fijos.length) {
+    if (!renglones.some((r) => r.tipo === 'fijo')) {
+      await Promise.all(
+        fijos.map((p, i) =>
+          agregarDoc('renglones', { ...base, tipo: 'fijo', nombre: p.nombre, monto: p.monto, moneda: p.moneda ?? 'CRC', dia_vence: p.dia_vence, cuenta_id: p.cuenta_id, orden: i }),
+        ),
+      )
+    }
+    await marcarPuesto(mes, 'fijosPuestos')
+  }
+
+  // Transporte: las 5 semanas con el bus y el uber de la plantilla.
+  const semana = plantillas.find((p) => p.tipo === 'transporte')
+  if (!transporteListo && semana) {
+    if (!renglones.some((r) => r.tipo === 'transporte')) {
+      const bus = semana.bus ?? 0
+      const uber = semana.uber ?? 0
+      await Promise.all(
+        [1, 2, 3, 4, 5].map((n) =>
+          agregarDoc('renglones', { ...base, tipo: 'transporte', nombre: `Semana ${n}`, bus, uber, monto: Math.round((bus + uber) * 100) / 100, moneda: 'CRC', dia_vence: null, orden: n }),
+        ),
+      )
+    }
+    await marcarPuesto(mes, 'transportePuesto')
+  }
+}
+
+// Lo que se gasta normalmente cada semana en bus y uber; con esto se arman las semanas de cada mes.
+function TransporteDeCadaSemana({ plantilla, hacer }: { plantilla?: Plantilla; hacer: Hacer }) {
+  const guardar = (campo: 'bus' | 'uber', valor: number) => {
+    const bus = campo === 'bus' ? valor : plantilla?.bus ?? 0
+    const uber = campo === 'uber' ? valor : plantilla?.uber ?? 0
+    if (plantilla && bus === (plantilla.bus ?? 0) && uber === (plantilla.uber ?? 0)) return
+    const datos = { bus, uber, monto: Math.round((bus + uber) * 100) / 100 }
+    hacer(() =>
+      plantilla
+        ? cambiar('plantillas', plantilla.id, datos)
+        : agregarDoc('plantillas', { ...datos, tipo: 'transporte', nombre: 'Transporte de cada semana', moneda: 'CRC', dia_vence: null, cuenta_id: null, orden: 99 }),
+    )
+  }
+  const campo = (etiqueta: string, k: 'bus' | 'uber') => (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: '1 1 110px' }}>
+      <span className="suave peq">{etiqueta}</span>
+      <input
+        key={`${k}-${plantilla?.[k] ?? 0}`}
+        className="inp chico num"
+        inputMode="decimal"
+        placeholder="₡0"
+        defaultValue={plantilla?.[k] ? plantilla[k]!.toLocaleString('en-US') : ''}
+        onBlur={(e) => guardar(k, leerMonto(e.target.value))}
+      />
+    </label>
+  )
+  return (
+    <div className="seccion">
+      <span className="lbl">Transporte de cada semana</span>
+      <div className="card pad">
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          {campo('Bus por semana', 'bus')}
+          {campo('Uber por semana', 'uber')}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: '1 1 90px' }}>
+            <span className="suave peq">Total por semana</span>
+            <strong className="num" style={{ minHeight: 40, display: 'flex', alignItems: 'center' }}>{dinero((plantilla?.bus ?? 0) + (plantilla?.uber ?? 0))}</strong>
+          </div>
+        </div>
+        <span className="suave peq">Cada mes nuevo trae las 5 semanas con estos montos; después cambia la semana que sea distinta.</span>
+      </div>
+    </div>
   )
 }

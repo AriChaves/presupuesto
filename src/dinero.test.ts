@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { colones, colonesQueFaltan, convertir, dinero, dividir, dolaresParaCambiar, ultimoTipoDeCambio, liquidar, moverMes, nombreMes, proximosPagos, resumenMes, saldosNetos, sobranteArrastrado, sumarPorMoneda, textoMonedas } from './dinero'
+import { colones, colonesQueFaltan, convertir, dinero, totalAhorros, fechaQuincena, textoFecha, dividir, dolaresParaCambiar, ultimoTipoDeCambio, liquidar, moverMes, nombreMes, proximosPagos, resumenMes, saldosNetos, sobranteArrastrado, sumarPorMoneda, textoMonedas } from './dinero'
 
 describe('colones', () => {
   it('formatea con separador de miles', () => {
@@ -98,8 +98,18 @@ describe('sobrante que pasa al mes siguiente', () => {
   it('diciembre recibe el sobrante de noviembre (como el Excel: 8,900.74)', () => {
     expect(sobranteArrastrado(datos, '2026-11', '2026-12')).toBeCloseTo(8900.74)
   })
-  it('enero arrastra lo de noviembre y diciembre, aunque diciembre quede en negativo', () => {
-    expect(sobranteArrastrado(datos, '2026-11', '2027-01')).toBeCloseTo(8900.74 + 150000 - 200000)
+  it('si diciembre queda en negativo, a enero no pasa nada', () => {
+    expect(sobranteArrastrado(datos, '2026-11', '2027-01')).toBe(0)
+  })
+  it('un mes negativo no le quita al que viene después', () => {
+    const d2 = [
+      r('2026-11', 'entrada', 100),
+      r('2026-11', 'fijo', 140), // noviembre queda en −40: no pasa
+      r('2026-12', 'entrada', 300),
+      r('2026-12', 'fijo', 100), // diciembre sobra 200
+    ]
+    expect(sobranteArrastrado(d2, '2026-11', '2026-12')).toBe(0)
+    expect(sobranteArrastrado(d2, '2026-11', '2027-01')).toBe(200)
   })
   it('apagado no arrastra nada', () => {
     expect(sobranteArrastrado(datos, null, '2026-12')).toBe(0)
@@ -185,5 +195,41 @@ describe('convertir con el tipo de ARi', () => {
     expect(convertir(300, 'USD', 515.5)).toBe(154650)
     expect(convertir(51550, 'CRC', 515.5)).toBe(100)
     expect(convertir(300, 'USD', 0)).toBe(0)
+  })
+})
+
+describe('quincenas', () => {
+  it('noviembre se paga el 30 de octubre y el 15 de noviembre', () => {
+    expect(textoFecha(fechaQuincena('2026-11', 30))).toBe('30 oct')
+    expect(textoFecha(fechaQuincena('2026-11', 15))).toBe('15 nov')
+  })
+  it('enero toma el 30 de diciembre del año anterior', () => {
+    expect(fechaQuincena('2027-01', 30)).toEqual(new Date(2026, 11, 30))
+  })
+  it('marzo toma el último día de febrero', () => {
+    expect(textoFecha(fechaQuincena('2027-03', 30))).toBe('28 feb')
+  })
+  it('próximos pagos usa la fecha de la quincena', () => {
+    const hoy = new Date(2026, 9, 28)
+    const r = proximosPagos([{ nombre: 'Cel', monto: 1, dia: 30, fecha: fechaQuincena('2026-11', 30) }], hoy)
+    expect(r[0].estado).toBe('En 2 días')
+  })
+})
+
+describe('total de ahorros', () => {
+  const sobres = [
+    { nombre: 'Ahorro', monto: 541.2, moneda: 'USD' as const },
+    { nombre: 'Ahorro BN', monto: 100000, moneda: 'CRC' as const },
+    { nombre: 'GYM', monto: 32000, moneda: 'CRC' as const }, // no es ahorro
+  ]
+  it('junta colones y dólares con la compra y la venta de ARi', () => {
+    const t = totalAhorros(sobres, 505, 515)
+    expect(t.CRC).toBe(100000)
+    expect(t.USD).toBe(541.2)
+    expect(t.enColones).toBe(373306) // 100,000 + 541.20 × 505
+    expect(t.enDolares).toBeCloseTo(735.37) // 541.20 + 100,000 ÷ 515
+  })
+  it('sin tipo de cambio no inventa el total', () => {
+    expect(totalAhorros(sobres, 0, 0).enColones).toBeNull()
   })
 })

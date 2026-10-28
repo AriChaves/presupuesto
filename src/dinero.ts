@@ -117,7 +117,8 @@ export function liquidar(neto: Record<string, number>): Transferencia[] {
   return out
 }
 
-export type Vencimiento = { nombre: string; monto: number; dia: number; detalle?: string; moneda?: Moneda }
+// `fecha` manda cuando viene (quincenas, meses siguientes); si no, `dia` es un día del mes de hoy.
+export type Vencimiento = { nombre: string; monto: number; dia: number; detalle?: string; moneda?: Moneda; fecha?: Date }
 export type ProximoPago = Vencimiento & { fecha: Date; dias: number; estado: string }
 
 // Ordena lo pendiente del mes por fecha y le pone "Vencido", "Hoy", "Mañana" o "En N días".
@@ -126,7 +127,7 @@ export function proximosPagos(items: Vencimiento[], hoy: Date): ProximoPago[] {
   const ultimo = new Date(h.getFullYear(), h.getMonth() + 1, 0).getDate()
   return items
     .map((it) => {
-      const fecha = new Date(h.getFullYear(), h.getMonth(), Math.min(it.dia, ultimo))
+      const fecha = it.fecha ? new Date(it.fecha.getFullYear(), it.fecha.getMonth(), it.fecha.getDate()) : new Date(h.getFullYear(), h.getMonth(), Math.min(it.dia, ultimo))
       const dias = Math.round((fecha.getTime() - h.getTime()) / 86400000)
       const estado =
         dias < 0 ? `Vencido · hace ${-dias} ${-dias === 1 ? 'día' : 'días'}` : dias === 0 ? 'Hoy' : dias === 1 ? 'Mañana' : `En ${dias} días`
@@ -149,12 +150,18 @@ export function resumenMes(renglones: RenglonMes[], moneda: Moneda, arrastre = 0
 
 // Lo que viene sobrando de los meses anteriores: desde `desde` hasta antes de `mes`.
 // Cada mes pasa al siguiente lo que entró menos lo que se gastó (solo lo marcado), por moneda.
+// Solo pasa lo que sobra: si un mes queda en negativo, el siguiente empieza en cero.
 export function sobranteArrastrado(renglones: RenglonMes[], desde: string | null, mes: string, moneda: Moneda = 'CRC'): number {
   if (!desde || mes <= desde) return 0
-  const total = renglones
-    .filter((r) => r.hecho && r.mes >= desde && r.mes < mes && (r.moneda ?? 'CRC') === moneda)
-    .reduce((s, r) => s + (r.tipo === 'entrada' || r.tipo === 'cambio' ? r.monto : -r.monto), 0)
-  return redondear(total)
+  // Mes por mes: lo que sobra pasa al siguiente; si queda en negativo, no se pasa nada.
+  let pasa = 0
+  for (let m = desde; m < mes; m = moverMes(m, 1)) {
+    const neto = renglones
+      .filter((r) => r.hecho && r.mes === m && (r.moneda ?? 'CRC') === moneda)
+      .reduce((s, r) => s + (r.tipo === 'entrada' || r.tipo === 'cambio' ? r.monto : -r.monto), 0)
+    pasa = Math.max(0, redondear(pasa + neto))
+  }
+  return pasa
 }
 
 // Cuántos colones faltan para cubrir lo planeado en colones del mes (marcado o no),
@@ -196,4 +203,32 @@ export function dolaresParaCambiar(colones: number, tipo: number): number {
 export function convertir(monto: number, de: Moneda, tipo: number): number {
   if (monto <= 0 || tipo <= 0) return 0
   return redondear(de === 'USD' ? monto * tipo : monto / tipo)
+}
+
+// Las quincenas de un mes: la "30" se paga con lo del 30 del mes anterior y la "15" el 15 del mes.
+// Ej.: noviembre → 30 oct y 15 nov. En un mes corto, el 30 cae el último día.
+export function fechaQuincena(mes: string, dia: number): Date {
+  const [a, m] = mes.split('-').map(Number)
+  if (dia <= 15) return new Date(a, m - 1, dia)
+  const ultimo = new Date(a, m - 1, 0).getDate()
+  return new Date(a, m - 2, Math.min(dia, ultimo))
+}
+
+// "30 oct", "15 nov".
+export function textoFecha(f: Date): string {
+  return `${f.getDate()} ${MESES[f.getMonth()].slice(0, 3)}`
+}
+
+// Sobres que cuentan como ahorro: los que dicen "ahorro" en el nombre.
+export const esAhorro = (nombre: string) => /ahorro/i.test(nombre)
+
+// Total de los ahorros en una sola moneda con el tipo de ARi del momento:
+// en colones, los dólares a lo que ARi compra; en dólares, los colones a lo que ARi vende.
+export function totalAhorros(sobres: { nombre: string; monto: number; moneda?: Moneda }[], compra: number, venta: number) {
+  const t = sumarPorMoneda(sobres.filter((s) => esAhorro(s.nombre)))
+  return {
+    ...t,
+    enColones: compra > 0 ? redondear(t.CRC + t.USD * compra) : null,
+    enDolares: venta > 0 ? redondear(t.USD + t.CRC / venta) : null,
+  }
 }

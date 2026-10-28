@@ -1,8 +1,8 @@
 import { useState, type FormEvent } from 'react'
-import { agregar as agregarDoc, borrar, cambiar, guardarDesdeMes, increment, leerDesdeMes, listar } from '../datos'
-import { Atras, BotonBorrar, Cargando, MensajeError, PedirMonto, SelectMoneda, leerMonto, useCarga, useHacer } from '../comun'
-import { SIMBOLO, dinero, mesDe, nombreMes, sumarPorMoneda, textoMonedas, type Moneda } from '../dinero'
-import type { Cuenta, Plantilla, Sobre } from '../tipos'
+import { agregar as agregarDoc, borrar, cambiar, guardarDesdeMes, guardarTipoARi, increment, leerDesdeMes, leerTipoARi, listar, where, type TipoARi } from '../datos'
+import { Atras, BotonBorrar, Cargando, MensajeError, PedirMonto, SelectMoneda, SelectQuincena, leerMonto, useCarga, useHacer } from '../comun'
+import { SIMBOLO, dinero, esAhorro, mesDe, nombreMes, sumarPorMoneda, textoMonedas, totalAhorros, ultimoTipoDeCambio, type Moneda } from '../dinero'
+import type { Cuenta, Plantilla, Renglon, Sobre } from '../tipos'
 
 const TIPOS_CUENTA = ['tarjeta', 'cuenta de ahorro', 'efectivo', 'otra']
 
@@ -11,8 +11,17 @@ type Hacer = (fn: () => Promise<unknown>) => Promise<void>
 export function Cuentas() {
   const [error, setError] = useState<string | null>(null)
   const carga = useCarga(async () => {
-    const [cuentas, sobres, plantillas, desdeMes] = await Promise.all([listar<Cuenta>('cuentas'), listar<Sobre>('sobres'), listar<Plantilla>('plantillas'), leerDesdeMes()])
-    return { cuentas, sobres, plantillas, desdeMes }
+    const [cuentas, sobres, plantillas, desdeMes, tipoARi, cambios] = await Promise.all([
+      listar<Cuenta>('cuentas'),
+      listar<Sobre>('sobres'),
+      listar<Plantilla>('plantillas'),
+      leerDesdeMes(),
+      leerTipoARi(),
+      listar<Renglon>('renglones', where('tipo', '==', 'cambio')),
+    ])
+    // Si nunca escribió el tipo aquí, arranca con el del último cambio que anotó.
+    const ultimo = ultimoTipoDeCambio(cambios)
+    return { cuentas, sobres, plantillas, desdeMes, tipoARi: tipoARi ?? (ultimo ? { compra: ultimo, venta: ultimo } : null) }
   }, [])
   const hacer: Hacer = useHacer(setError, carga.recargar)
 
@@ -31,12 +40,11 @@ export function Cuentas() {
         <Cargando />
       ) : (
         <>
+          <Ahorros sobres={d.sobres} inicial={d.tipoARi} hacer={hacer} />
           <SobranteSeccion desdeMes={d.desdeMes} hacer={hacer} />
           <CuentasSeccion cuentas={d.cuentas} hacer={hacer} />
           <SobresSeccion sobres={d.sobres} cuentas={d.cuentas} hacer={hacer} />
-          <PlantillasSeccion tipo="entrada" titulo="Entradas de cada mes" plantillas={d.plantillas} cuentas={d.cuentas} hacer={hacer} />
-          <PlantillasSeccion tipo="fijo" titulo="Gastos fijos de cada mes" plantillas={d.plantillas} cuentas={d.cuentas} hacer={hacer} />
-          <div className="aviso">Las plantillas se usan al llenar un mes nuevo. Cambiarlas no toca los meses que ya existen.</div>
+          <div className="aviso">Los gastos fijos de cada mes se editan en Mi presupuesto.</div>
         </>
       )}
     </div>
@@ -165,7 +173,7 @@ function SobresSeccion({ sobres, cuentas, hacer }: { sobres: Sobre[]; cuentas: C
   )
 }
 
-function PlantillasSeccion(props: { tipo: 'entrada' | 'fijo'; titulo: string; plantillas: Plantilla[]; cuentas: Cuenta[]; hacer: Hacer }) {
+export function PlantillasSeccion(props: { tipo: 'entrada' | 'fijo'; titulo: string; plantillas: Plantilla[]; cuentas: Cuenta[]; hacer: Hacer }) {
   const { tipo, titulo, cuentas, hacer } = props
   const lista = props.plantillas.filter((p) => p.tipo === tipo)
   const [nombre, setNombre] = useState('')
@@ -194,9 +202,9 @@ function PlantillasSeccion(props: { tipo: 'entrada' | 'fijo'; titulo: string; pl
               <span>{p.nombre}</span>
               <span className="suave peq num">
                 {dinero(p.monto, p.moneda)}
-                {p.dia_vence ? ` · vence día ${p.dia_vence}` : ''}
               </span>
             </div>
+            {tipo === 'fijo' && <SelectQuincena dia={p.dia_vence} etiqueta={p.nombre} alCambiar={(dia) => hacer(() => cambiar('plantillas', p.id, { dia_vence: dia }))} />}
             {tipo === 'fijo' && (
               <SelectCuenta valor={p.cuenta_id} cuentas={cuentas} alCambiar={(id) => hacer(() => cambiar('plantillas', p.id, { cuenta_id: id }))} />
             )}
@@ -226,7 +234,7 @@ function SobranteSeccion({ desdeMes, hacer }: { desdeMes: string | null; hacer: 
           <span style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
             <span>Pasarlo como entrada al mes siguiente</span>
             <span className="suave peq">
-              {desdeMes ? `Desde ${nombreMes(desdeMes).toLowerCase()}. Si un mes queda en negativo, también se pasa.` : 'Apagado: cada mes empieza de cero.'}
+              {desdeMes ? `Desde ${nombreMes(desdeMes).toLowerCase()}. Solo pasa lo que sobra; si un mes queda en negativo, el siguiente empieza en cero.` : 'Apagado: cada mes empieza de cero.'}
             </span>
           </span>
           <input
@@ -282,6 +290,56 @@ function SobreFila({ s, cuentas, hacer }: { s: Sobre; cuentas: Cuenta[]; hacer: 
           <Borrar etiqueta={s.nombre} alBorrar={() => hacer(() => borrar('sobres', s.id))} />
         </div>
       )}
+    </div>
+  )
+}
+
+// Total de los sobres de ahorro, en colones y en dólares, con el tipo de ARi del momento.
+function Ahorros({ sobres, inicial, hacer }: { sobres: Sobre[]; inicial: TipoARi | null; hacer: Hacer }) {
+  const [compra, setCompra] = useState(inicial?.compra ? String(inicial.compra) : '')
+  const [venta, setVenta] = useState(inicial?.venta ? String(inicial.venta) : '')
+  const tipo = { compra: leerMonto(compra), venta: leerMonto(venta) }
+  const t = totalAhorros(sobres, tipo.compra, tipo.venta)
+  const ahorros = sobres.filter((s) => esAhorro(s.nombre))
+  const guardar = () => {
+    if (tipo.compra > 0 && tipo.venta > 0 && (tipo.compra !== inicial?.compra || tipo.venta !== inicial?.venta)) hacer(() => guardarTipoARi(tipo))
+  }
+  const campo = (etiqueta: string, valor: string, set: (v: string) => void) => (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: '1 1 120px' }}>
+      <span className="suave peq">{etiqueta}</span>
+      <input className="inp chico num" inputMode="decimal" placeholder="₡ por dólar" value={valor} onChange={(e) => set(e.target.value)} onBlur={guardar} />
+    </label>
+  )
+
+  return (
+    <div className="seccion">
+      <span className="lbl">Mis ahorros</span>
+      <div className="card pad">
+        {ahorros.length === 0 ? (
+          <span className="suave">Cree un sobre con "Ahorro" en el nombre y aquí sale el total.</span>
+        ) : (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span className="suave peq">Todo en colones</span>
+                <strong className="num" style={{ fontSize: 22, color: 'var(--verde)' }}>{t.enColones !== null ? dinero(t.enColones) : '—'}</strong>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span className="suave peq">Todo en dólares</span>
+                <strong className="num" style={{ fontSize: 22, color: 'var(--verde)' }}>{t.enDolares !== null ? dinero(t.enDolares, 'USD') : '—'}</strong>
+              </div>
+            </div>
+            <span className="suave peq">
+              {ahorros.map((s) => `${s.nombre} ${dinero(s.monto, s.moneda)}`).join(' · ')} — tiene {textoMonedas({ CRC: t.CRC, USD: t.USD })}
+            </span>
+          </>
+        )}
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          {campo('ARi le compra el dólar a ₡', compra, setCompra)}
+          {campo('ARi le vende el dólar a ₡', venta, setVenta)}
+        </div>
+        <span className="suave peq">Copie los dos tipos de la app de ARi. En colones se usa la compra; en dólares, la venta.</span>
+      </div>
     </div>
   )
 }

@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
 import { mensaje } from './firebase'
 import { gastosYPagos, misGrupos } from './datos'
-import { SIMBOLO, type Moneda } from './dinero'
+import { SIMBOLO, fechaQuincena, textoFecha, type Moneda } from './dinero'
 import type { Gasto, Grupo, Miembro, PagoGrupo, Perfil } from './tipos'
 
 // ───────────── Navegación ─────────────
@@ -19,8 +19,10 @@ export const Sesion = createContext<Ctx>(null as unknown as Ctx)
 export const useSesion = () => useContext(Sesion)
 
 // ───────────── Carga de datos ─────────────
+// Carga datos y los vuelve a cargar con recargar(). Si cambian las deps (ej. el mes),
+// lo de antes deja de mostrarse de una vez: nunca se ve el mes nuevo con datos del anterior.
 export function useCarga<T>(cargar: () => Promise<T>, deps: unknown[]) {
-  const [datos, setDatos] = useState<T | null>(null)
+  const [cargado, setCargado] = useState<{ de: unknown; datos: T } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [vuelta, setVuelta] = useState(0)
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -28,12 +30,13 @@ export function useCarga<T>(cargar: () => Promise<T>, deps: unknown[]) {
   useEffect(() => {
     let vivo = true
     fn()
-      .then((d) => vivo && (setDatos(d), setError(null)))
+      .then((d) => vivo && (setCargado({ de: fn, datos: d }), setError(null)))
       .catch((e: unknown) => vivo && setError(mensaje(e)))
     return () => {
       vivo = false
     }
   }, [fn, vuelta])
+  const datos = cargado && cargado.de === fn ? cargado.datos : null
   return { datos, error, recargar: () => setVuelta((v) => v + 1) }
 }
 
@@ -227,6 +230,24 @@ export function SelectMoneda({ valor, alCambiar }: { valor: Moneda | undefined; 
     <select className="inp chico" style={{ flex: '0 0 62px', width: 62, padding: '0 6px' }} value={valor ?? 'CRC'} onChange={(e) => alCambiar(e.target.value as Moneda)} aria-label="Moneda">
       <option value="CRC">{SIMBOLO.CRC}</option>
       <option value="USD">{SIMBOLO.USD}</option>
+    </select>
+  )
+}
+
+// En qué quincena se paga. Con `mes` muestra la fecha real (noviembre: 30 oct / 15 nov).
+export function SelectQuincena({ dia, alCambiar, etiqueta, mes }: { dia: number | null; alCambiar: (d: number | null) => void; etiqueta: string; mes?: string }) {
+  return (
+    <select
+      className="inp chico"
+      style={{ flex: '0 0 auto', width: 'auto', minHeight: 32, fontSize: 13, padding: '0 6px' }}
+      value={dia ?? ''}
+      onChange={(e) => alCambiar(e.target.value ? Number(e.target.value) : null)}
+      aria-label={`Quincena de ${etiqueta}`}
+    >
+      <option value="">Sin quincena</option>
+      <option value="30">{mes ? `Quincena ${textoFecha(fechaQuincena(mes, 30))}` : 'Quincena 30 (del mes anterior)'}</option>
+      <option value="15">{mes ? `Quincena ${textoFecha(fechaQuincena(mes, 15))}` : 'Quincena 15'}</option>
+      {dia && dia !== 15 && dia !== 30 && <option value={dia}>Día {dia}</option>}
     </select>
   )
 }
