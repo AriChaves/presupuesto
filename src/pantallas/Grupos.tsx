@@ -1,8 +1,9 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import * as datos from '../datos'
 import { mensaje } from '../firebase'
-import { Atras, Cargando, Icono, MensajeError, cargarGrupos, useHacer, inicial, leerMonto, nombreDe, useCarga, useSesion, type DatosGrupos } from '../comun'
+import { Atras, BotonBorrar, Cargando, Icono, MensajeError, PedirMonto, cargarGrupos, useHacer, inicial, nombreDe, useCarga, useSesion, type DatosGrupos } from '../comun'
 import { colones, liquidar, mesCorto, nombreMes, saldosNetos, type Transferencia } from '../dinero'
+import type { Grupo } from '../tipos'
 
 // Lo que yo debo (negativo) o me deben (positivo) en un grupo.
 export function miSaldo(d: DatosGrupos, grupoId: string, yo: string): number {
@@ -86,6 +87,7 @@ export function GrupoDetalle({ id }: { id: string }) {
   const [correo, setCorreo] = useState('')
   const [aviso, setAviso] = useState<string | null>(null)
   const hacer = useHacer(setError, carga.recargar)
+  const [pagando, setPagando] = useState<string | null>(null)
 
   // Si el otro anota algo, se ve aquí al instante.
   useEffect(() => {
@@ -120,21 +122,12 @@ export function GrupoDetalle({ id }: { id: string }) {
     setAviso(`Listo. Cuando ${email} cree su cuenta o entre a la app, va a aparecer en este grupo.`)
   }
 
-  async function registrarPago(t: Transferencia) {
-    const texto = prompt('¿Cuánto se pagó?', String(Math.round(t.monto)))
-    if (texto === null) return
-    const monto = leerMonto(texto)
-    if (monto <= 0) return
+  async function registrarPago(t: Transferencia, monto: number) {
+    setPagando(null)
     await hacer(() => datos.agregarPago(id, { de: t.de, a: t.a, monto, fecha: new Date().toLocaleDateString('en-CA'), nota: '' }))
   }
 
-  async function borrarGasto(gid: string, desc: string) {
-    if (!confirm(`¿Borrar "${desc}"? Se borra para todos en el grupo.`)) return
-    await hacer(() => datos.borrarGasto(id, gid))
-  }
-
   async function salir() {
-    if (!confirm('¿Salir de este grupo? Ya no va a ver sus gastos.')) return
     try {
       await datos.salirDeGrupo(id)
       ir({ p: 'grupos' })
@@ -190,9 +183,13 @@ export function GrupoDetalle({ id }: { id: string }) {
           return (
             <div key={`${t.de}-${t.a}`} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               <span style={{ flex: 1, fontSize: 16 }}>{texto}</span>
-              <button className="btn chico borde" onClick={() => registrarPago(t)}>
-                {t.a === yo.id ? 'Ya me pagó' : 'Registrar pago'}
-              </button>
+              {pagando === `${t.de}-${t.a}` ? (
+                <PedirMonto etiqueta="¿Cuánto se pagó?" inicial={t.monto} boton="Guardar" alCancelar={() => setPagando(null)} alListo={(n) => registrarPago(t, n)} />
+              ) : (
+                <button className="btn chico borde" onClick={() => setPagando(`${t.de}-${t.a}`)}>
+                  {t.a === yo.id ? 'Ya me pagó' : 'Registrar pago'}
+                </button>
+              )}
             </div>
           )
         })}
@@ -224,9 +221,7 @@ export function GrupoDetalle({ id }: { id: string }) {
                     <span style={{ fontWeight: 500 }}>{colones(g.monto)}</span>
                     {g.division !== 'solo' && <span className="peq suave">su parte {colones(mia)}</span>}
                   </div>
-                  <button className="btn peligro" aria-label={`Borrar ${g.descripcion}`} onClick={() => borrarGasto(g.id, g.descripcion)}>
-                    <Icono n="basura" t={18} />
-                  </button>
+                  <BotonBorrar etiqueta={g.descripcion} pregunta="¿Borrar para todos?" alBorrar={() => hacer(() => datos.borrarGasto(id, g.id))} />
                 </div>
               )
             })}
@@ -246,21 +241,14 @@ export function GrupoDetalle({ id }: { id: string }) {
                   <span className="suave peq">{p.fecha}</span>
                 </div>
                 <span className="num">{colones(p.monto)}</span>
-                <button
-                  className="btn peligro"
-                  aria-label="Borrar pago"
-                  onClick={async () => {
-                    if (!confirm('¿Borrar este pago?')) return
-                    await hacer(() => datos.borrarPago(id, p.id))
-                  }}
-                >
-                  <Icono n="basura" t={18} />
-                </button>
+                <BotonBorrar etiqueta="este pago" alBorrar={() => hacer(() => datos.borrarPago(id, p.id))} />
               </div>
             ))}
           </div>
         </div>
       )}
+
+      <Personas grupo={grupo} hacer={hacer} />
 
       <div className="seccion">
         <span className="lbl">Invitar</span>
@@ -274,7 +262,66 @@ export function GrupoDetalle({ id }: { id: string }) {
         {aviso && <div className="aviso">{aviso}</div>}
       </div>
 
-      <button className="btn peligro" onClick={salir}>Salir de este grupo</button>
+      <BotonBorrar etiqueta="salir del grupo" texto="Salir de este grupo" pregunta="¿Salir? Ya no va a ver sus gastos." alBorrar={salir} />
+    </div>
+  )
+}
+
+// Gente del grupo sin cuenta todavía: se le pueden anotar gastos y después se une con su cuenta.
+function Personas({ grupo, hacer }: { grupo: Grupo; hacer: (fn: () => Promise<unknown>) => Promise<void> }) {
+  const [nombre, setNombre] = useState('')
+  const personas = Object.entries(grupo.personas ?? {})
+  const vinculados = new Set(Object.values(grupo.vinculos ?? {}))
+  // Miembros con cuenta que todavía no están unidos a ninguna persona (posibles "es la misma").
+  const libres = grupo.miembros.filter((uid) => uid !== grupo.creadoPor && !vinculados.has(uid))
+
+  return (
+    <div className="seccion">
+      <span className="lbl">Personas sin cuenta</span>
+      <div className="card">
+        {personas.map(([pid, p]) => {
+          const uid = grupo.vinculos?.[pid]
+          return (
+            <div className="fila" key={pid} style={{ flexWrap: 'wrap' }}>
+              <div className="av">{inicial(p.nombre)}</div>
+              <div className="crece">
+                <span>{p.nombre}</span>
+                <span className="suave peq">{uid ? `Ya entró con su cuenta (${grupo.nombres[uid] ?? 'unida'})` : 'Sin cuenta · los gastos quedan a su nombre'}</span>
+              </div>
+              {!uid && libres.length > 0 && (
+                <select
+                  className="inp chico"
+                  style={{ flex: '0 1 170px' }}
+                  value=""
+                  aria-label={`Unir a ${p.nombre} con su cuenta`}
+                  onChange={(e) => e.target.value && hacer(() => datos.vincularPersona(grupo.id, pid, e.target.value))}
+                >
+                  <option value="">Es la cuenta de…</option>
+                  {libres.map((u) => (
+                    <option key={u} value={u}>
+                      {grupo.nombres[u] ?? 'Miembro'}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )
+        })}
+        <form
+          className="form-fila"
+          style={personas.length ? undefined : { borderTop: 'none' }}
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (!nombre.trim()) return
+            hacer(() => datos.agregarPersona(grupo.id, nombre.trim()))
+            setNombre('')
+          }}
+        >
+          <input className="inp chico" placeholder="Nombre, ej.: Fabi" value={nombre} onChange={(e) => setNombre(e.target.value)} aria-label="Nombre de la persona sin cuenta" />
+          <button className="btn chico">Agregar</button>
+        </form>
+      </div>
+      {personas.length > 0 && <span className="suave peq">Cuando esa persona cree su cuenta e invite su correo, escoja "Es la cuenta de…" para unirla.</span>}
     </div>
   )
 }

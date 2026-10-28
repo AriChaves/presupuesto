@@ -1,13 +1,13 @@
 import { useEffect } from 'react'
 import { cargarArrastre, listar, where } from '../datos'
 import { Cargando, Icono, MensajeError, cargarGrupos, inicial, nombreDe, useCarga, useSesion } from '../comun'
-import { colones, mesDe, nombreMes } from '../dinero'
+import { colones, dinero, mesDe, nombreMes, resumenMes, type Moneda } from '../dinero'
 import type { Renglon } from '../tipos'
 import { cargarVencimientos, ListaPagos } from './Pagos'
 import { miSaldo, transferenciasDe } from './Grupos'
 
 // Un aviso por día con lo vencido, lo de hoy y lo de mañana.
-function avisar(pendientes: { nombre: string; dias: number; monto: number }[]) {
+function avisar(pendientes: { nombre: string; dias: number; monto: number; moneda?: Moneda }[]) {
   try {
     if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
     if (localStorage.getItem('avisos-activados') !== '1') return
@@ -17,7 +17,7 @@ function avisar(pendientes: { nombre: string; dias: number; monto: number }[]) {
     if (urgentes.length === 0) return
     localStorage.setItem('ultimo-aviso', hoy)
     new Notification('Pagos pendientes', {
-      body: urgentes.map((p) => `${p.nombre} ${colones(p.monto)} · ${p.dias < 0 ? 'vencido' : p.dias === 0 ? 'hoy' : 'mañana'}`).join('\n'),
+      body: urgentes.map((p) => `${p.nombre} ${dinero(p.monto, p.moneda)} · ${p.dias < 0 ? 'vencido' : p.dias === 0 ? 'hoy' : 'mañana'}`).join('\n'),
       icon: '/icon-192.png',
     })
   } catch {
@@ -43,10 +43,14 @@ export function Inicio() {
   }, [carga.datos])
 
   const d = carga.datos
-  const entradas = (d?.renglones.filter((r) => r.tipo === 'entrada' && r.hecho).reduce((s, r) => s + Number(r.monto), 0) ?? 0) + (d?.arrastre ?? 0)
-  const gasto = d?.renglones.filter((r) => r.tipo !== 'entrada' && r.hecho).reduce((s, r) => s + Number(r.monto), 0) ?? 0
-  const sobrante = entradas - gasto
+  const crc = resumenMes(d?.renglones ?? [], 'CRC', d?.arrastre.CRC ?? 0)
+  const entradas = crc.entradas + crc.cambio
+  const gasto = crc.gasto
+  const sobrante = crc.sobrante
   const uso = entradas > 0 ? Math.min(100, (gasto / entradas) * 100) : 0
+  // Los dólares van por aparte, en una línea debajo.
+  const dolares = resumenMes(d?.renglones ?? [], 'USD', d?.arrastre.USD ?? 0).sobrante
+  const hayDolares = Boolean(d && (d.renglones.some((r) => r.moneda === 'USD') || d.arrastre.USD !== 0))
 
   return (
     <div className="contenido">
@@ -70,6 +74,11 @@ export function Inicio() {
               <span>Entró {colones(entradas)}</span>
               <span>Gastado {colones(gasto)}</span>
             </div>
+            {hayDolares && (
+              <div className="num" style={{ borderTop: '1px solid rgba(255,255,255,.25)', paddingTop: 8, fontSize: 14 }}>
+                En dólares: {dolares < 0 ? 'se pasó' : 'le sobra'} <strong>{dinero(dolares, 'USD')}</strong>
+              </div>
+            )}
           </button>
 
           {saldos()}

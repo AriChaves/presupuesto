@@ -1,17 +1,28 @@
 import { useState, type FormEvent } from 'react'
-import { agregar as agregarDoc, borrar, cambiar, listar, where } from '../datos'
-import { Cargando, MensajeError, leerMonto, useCarga, useHacer, useSesion } from '../comun'
-import { colones, mesDe, proximosPagos, type ProximoPago, type Vencimiento } from '../dinero'
+import { agregar as agregarDoc, borrar, cambiar, listar, misGrupos, where } from '../datos'
+import { BotonBorrar, Cargando, MensajeError, leerMonto, useCarga, useHacer, useSesion } from '../comun'
+import { colones, dinero, mesDe, proximosPagos, type ProximoPago, type Vencimiento } from '../dinero'
 import type { Cuenta, Prestamo, Renglon } from '../tipos'
 
 // Gastos fijos sin pagar este mes + cuotas de préstamos que debo.
 export async function cargarVencimientos(): Promise<ProximoPago[]> {
-  const [renglones, prestamos] = await Promise.all([
+  const [renglones, prestamos, grupos] = await Promise.all([
     listar<Renglon>('renglones', where('mes', '==', mesDe(new Date()))),
     listar<Prestamo>('prestamos'),
+    misGrupos(),
   ])
+  const pendientes = renglones.filter((x) => !x.hecho && x.dia_vence)
+  // Lo de un grupo se paga junto: una sola línea por grupo, día y moneda.
+  const juntos = new Map<string, Vencimiento>()
+  for (const x of pendientes.filter((x) => x.grupo_id)) {
+    const clave = `${x.grupo_id}-${x.dia_vence}-${x.moneda ?? 'CRC'}`
+    const nombre = `Pagar lo de ${grupos.find((g) => g.id === x.grupo_id)?.nombre ?? 'grupo'}`
+    const antes = juntos.get(clave)
+    juntos.set(clave, { nombre, monto: (antes?.monto ?? 0) + x.monto, moneda: x.moneda, dia: x.dia_vence! })
+  }
   const items: Vencimiento[] = [
-    ...renglones.filter((x) => !x.hecho && x.dia_vence).map((x) => ({ nombre: x.nombre, monto: x.monto, dia: x.dia_vence! })),
+    ...pendientes.filter((x) => !x.grupo_id).map((x) => ({ nombre: x.nombre, monto: x.monto, moneda: x.moneda, dia: x.dia_vence! })),
+    ...juntos.values(),
     ...prestamos
       .filter((x) => x.direccion === 'debo' && x.dia_pago && x.cuotas_pagadas < x.cuotas_total)
       .map((x) => ({ nombre: `Cuota ${x.nombre}`, monto: x.cuota, dia: x.dia_pago!, detalle: 'Préstamo' })),
@@ -33,7 +44,7 @@ export function ListaPagos({ pagos, max }: { pagos: ProximoPago[]; max?: number 
             <span>{p.nombre}</span>
             <span className={`peq ${p.dias < 0 ? 'debe' : 'suave'}`}>{p.estado}</span>
           </div>
-          <span className="num" style={{ fontWeight: 500 }}>{colones(p.monto)}</span>
+          <span className="num" style={{ fontWeight: 500 }}>{dinero(p.monto, p.moneda)}</span>
         </div>
       ))}
     </>
@@ -161,12 +172,7 @@ function TarjetaPrestamo({ p, cuentas, hacer }: { p: Prestamo; cuentas: Cuenta[]
           <option value="">Sin cuenta</option>
           {cuentas.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
         </select>
-        <button
-          className="btn peligro"
-          onClick={() => confirm(`¿Borrar "${p.nombre}"?`) && hacer(() => borrar('prestamos', p.id))}
-        >
-          Borrar
-        </button>
+        <BotonBorrar etiqueta={p.nombre} texto="Borrar" pregunta={`¿Borrar "${p.nombre}"?`} alBorrar={() => hacer(() => borrar('prestamos', p.id))} />
       </div>
     </div>
   )

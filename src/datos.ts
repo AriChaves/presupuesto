@@ -9,6 +9,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  increment,
   onSnapshot,
   query,
   serverTimestamp,
@@ -19,7 +20,7 @@ import {
 } from 'firebase/firestore'
 import { auth, db } from './firebase'
 import type { Gasto, Grupo, PagoGrupo, Perfil, Renglon } from './tipos'
-import { sobranteArrastrado } from './dinero'
+import { sobranteArrastrado, type PorMoneda } from './dinero'
 
 const uid = () => {
   const u = auth.currentUser
@@ -51,7 +52,7 @@ export async function listar<T extends { id: string }>(col: ColPersonal, ...filt
 export const agregar = (col: ColPersonal, datos: object) => addDoc(personal(col), datos)
 export const cambiar = (col: ColPersonal, id: string, datos: object) => updateDoc(doc(personal(col), id), datos)
 export const borrar = (col: ColPersonal, id: string) => deleteDoc(doc(personal(col), id))
-export { where }
+export { increment, where }
 
 // ───────────── Grupos: grupos/{gid} con gastos y pagos ─────────────
 type GrupoDoc = Omit<Grupo, 'id'>
@@ -83,6 +84,16 @@ export async function crearGrupo(nombre: string, yo: Perfil): Promise<string> {
 
 export const invitar = (gid: string, email: string) => updateDoc(doc(db, 'grupos', gid), { invitados: arrayUnion(email.toLowerCase()) })
 export const quitarInvitacion = (gid: string, email: string) => updateDoc(doc(db, 'grupos', gid), { invitados: arrayRemove(email) })
+
+// Alguien del grupo que todavía no tiene cuenta.
+export async function agregarPersona(gid: string, nombre: string): Promise<string> {
+  const pid = `p_${Math.random().toString(36).slice(2, 10)}`
+  await updateDoc(doc(db, 'grupos', gid), { [`personas.${pid}`]: { nombre } })
+  return pid
+}
+
+// Cuando esa persona ya entró con su cuenta: lo anotado a su nombre pasa a ser suyo.
+export const vincularPersona = (gid: string, pid: string, uid: string) => updateDoc(doc(db, 'grupos', gid), { [`vinculos.${pid}`]: uid })
 
 export const salirDeGrupo = (gid: string) =>
   updateDoc(doc(db, 'grupos', gid), { miembros: arrayRemove(uid()), [`nombres.${uid()}`]: deleteField() })
@@ -133,10 +144,10 @@ export async function leerDesdeMes(): Promise<string | null> {
 
 export const guardarDesdeMes = (desdeMes: string | null) => setDoc(doc(db, 'usuarios', uid()), { desdeMes }, { merge: true })
 
-// Lo que viene sobrando de los meses anteriores a `mes` (0 si está apagado).
-export async function cargarArrastre(mes: string): Promise<number> {
+// Lo que viene sobrando de los meses anteriores a `mes`, por moneda (0 si está apagado).
+export async function cargarArrastre(mes: string): Promise<PorMoneda> {
   const desde = await leerDesdeMes()
-  if (!desde || mes <= desde) return 0
+  if (!desde || mes <= desde) return { CRC: 0, USD: 0 }
   const anteriores = await listar<Renglon>('renglones', where('mes', '>=', desde), where('mes', '<', mes))
-  return sobranteArrastrado(anteriores, desde, mes)
+  return { CRC: sobranteArrastrado(anteriores, desde, mes, 'CRC'), USD: sobranteArrastrado(anteriores, desde, mes, 'USD') }
 }

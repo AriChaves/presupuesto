@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
-import { agregar as agregarDoc, borrar, cambiar, guardarDesdeMes, leerDesdeMes, listar } from '../datos'
-import { Atras, Cargando, Icono, MensajeError, leerMonto, useCarga, useHacer } from '../comun'
-import { colones, mesDe, nombreMes } from '../dinero'
+import { agregar as agregarDoc, borrar, cambiar, guardarDesdeMes, increment, leerDesdeMes, listar } from '../datos'
+import { Atras, BotonBorrar, Cargando, MensajeError, PedirMonto, SelectMoneda, leerMonto, useCarga, useHacer } from '../comun'
+import { SIMBOLO, dinero, mesDe, nombreMes, sumarPorMoneda, textoMonedas, type Moneda } from '../dinero'
 import type { Cuenta, Plantilla, Sobre } from '../tipos'
 
 const TIPOS_CUENTA = ['tarjeta', 'cuenta de ahorro', 'efectivo', 'otra']
@@ -44,17 +44,7 @@ export function Cuentas() {
 }
 
 function Borrar({ etiqueta, alBorrar }: { etiqueta: string; alBorrar: () => void }) {
-  return (
-    <button
-      className="btn peligro"
-      aria-label={`Borrar ${etiqueta}`}
-      onClick={() => {
-        if (confirm(`¿Borrar "${etiqueta}"?`)) alBorrar()
-      }}
-    >
-      <Icono n="basura" t={18} />
-    </button>
-  )
+  return <BotonBorrar etiqueta={etiqueta} pregunta={`¿Borrar "${etiqueta}"?`} alBorrar={alBorrar} />
 }
 
 function SelectCuenta({ valor, cuentas, alCambiar }: { valor: string | null; cuentas: Cuenta[]; alCambiar: (id: string | null) => void }) {
@@ -73,11 +63,12 @@ function SelectCuenta({ valor, cuentas, alCambiar }: { valor: string | null; cue
 function CuentasSeccion({ cuentas, hacer }: { cuentas: Cuenta[]; hacer: Hacer }) {
   const [nombre, setNombre] = useState('')
   const [tipo, setTipo] = useState('tarjeta')
+  const [moneda, setMoneda] = useState<Moneda>('CRC')
 
   async function agregar(e: FormEvent) {
     e.preventDefault()
     if (!nombre.trim()) return
-    await hacer(() => agregarDoc('cuentas', { nombre: nombre.trim(), tipo, orden: cuentas.length }))
+    await hacer(() => agregarDoc('cuentas', { nombre: nombre.trim(), tipo, moneda, efectivo_suelto: 0, orden: cuentas.length }))
     setNombre('')
   }
 
@@ -100,8 +91,9 @@ function CuentasSeccion({ cuentas, hacer }: { cuentas: Cuenta[]; hacer: Hacer })
                 <option key={t}>{t}</option>
               ))}
             </select>
+            <SelectMoneda valor={c.moneda} alCambiar={(m) => hacer(() => cambiar('cuentas', c.id, { moneda: m }))} />
             <label className="suave peq" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              Plata suelta
+              Plata suelta {SIMBOLO[c.moneda ?? 'CRC']}
               <input
                 key={c.efectivo_suelto}
                 className="inp chico num"
@@ -110,7 +102,7 @@ function CuentasSeccion({ cuentas, hacer }: { cuentas: Cuenta[]; hacer: Hacer })
                 defaultValue={c.efectivo_suelto ? c.efectivo_suelto.toLocaleString('en-US') : ''}
                 onBlur={(e) => {
                   const n = leerMonto(e.target.value)
-                  if (n !== c.efectivo_suelto) hacer(() => cambiar('cuentas', c.id, { efectivo_suelto: n }))
+                  if (n !== (c.efectivo_suelto ?? 0)) hacer(() => cambiar('cuentas', c.id, { efectivo_suelto: n }))
                 }}
               />
             </label>
@@ -124,6 +116,7 @@ function CuentasSeccion({ cuentas, hacer }: { cuentas: Cuenta[]; hacer: Hacer })
               <option key={t}>{t}</option>
             ))}
           </select>
+          <SelectMoneda valor={moneda} alCambiar={setMoneda} />
           <button className="btn chico">Agregar</button>
         </form>
       </div>
@@ -133,55 +126,38 @@ function CuentasSeccion({ cuentas, hacer }: { cuentas: Cuenta[]; hacer: Hacer })
 
 function SobresSeccion({ sobres, cuentas, hacer }: { sobres: Sobre[]; cuentas: Cuenta[]; hacer: Hacer }) {
   const [nombre, setNombre] = useState('')
-  const [monto, setMonto] = useState('')
   const [cuenta, setCuenta] = useState<string | null>(null)
-  const total = sobres.reduce((s, x) => s + x.monto, 0)
+  const [moneda, setMoneda] = useState<Moneda>('CRC')
+  const total = textoMonedas(sumarPorMoneda(sobres))
+
+  // Al escoger la cuenta, el sobre toma su moneda (se puede cambiar).
+  function escogerCuenta(id: string | null) {
+    setCuenta(id)
+    const c = cuentas.find((x) => x.id === id)
+    if (c) setMoneda(c.moneda ?? 'CRC')
+  }
 
   async function agregar(e: FormEvent) {
     e.preventDefault()
     if (!nombre.trim()) return
-    await hacer(() => agregarDoc('sobres', { nombre: nombre.trim(), monto: leerMonto(monto), cuenta_id: cuenta, orden: sobres.length }))
+    await hacer(() => agregarDoc('sobres', { nombre: nombre.trim(), monto: 0, moneda, cuenta_id: cuenta, orden: sobres.length }))
     setNombre('')
-    setMonto('')
   }
 
   return (
     <div className="seccion">
       <div className="seccion-titulo">
         <span className="lbl">Sobres · en qué cuenta está cada uno</span>
-        <span className="suave peq num">{colones(total)}</span>
+        <span className="suave peq num">{total}</span>
       </div>
       <div className="card">
         {sobres.map((s) => (
-          <div className="fila" key={s.id} style={{ flexWrap: 'wrap' }}>
-            <input
-              key={s.nombre}
-              className="inp chico"
-              defaultValue={s.nombre}
-              aria-label="Nombre del sobre"
-              style={{ flex: '1 1 120px' }}
-              onBlur={(e) => e.target.value.trim() && e.target.value !== s.nombre && hacer(() => cambiar('sobres', s.id, { nombre: e.target.value.trim() }))}
-            />
-            <input
-              key={s.monto}
-              className="inp chico num"
-              style={{ width: 110 }}
-              inputMode="decimal"
-              aria-label={`Monto de ${s.nombre}`}
-              defaultValue={s.monto ? s.monto.toLocaleString('en-US') : ''}
-              onBlur={(e) => {
-                const n = leerMonto(e.target.value)
-                if (n !== s.monto) hacer(() => cambiar('sobres', s.id, { monto: n }))
-              }}
-            />
-            <SelectCuenta valor={s.cuenta_id} cuentas={cuentas} alCambiar={(id) => hacer(() => cambiar('sobres', s.id, { cuenta_id: id }))} />
-            <Borrar etiqueta={s.nombre} alBorrar={() => hacer(() => borrar('sobres', s.id))} />
-          </div>
+          <SobreFila key={s.id} s={s} cuentas={cuentas} hacer={hacer} />
         ))}
         <form className="form-fila" onSubmit={agregar} style={sobres.length ? undefined : { borderTop: 'none' }}>
           <input className="inp chico" placeholder="Nuevo sobre" value={nombre} onChange={(e) => setNombre(e.target.value)} aria-label="Nombre del sobre nuevo" />
-          <input className="inp chico num" placeholder="₡" value={monto} onChange={(e) => setMonto(e.target.value)} inputMode="decimal" style={{ flex: '0 1 100px' }} aria-label="Monto" />
-          <SelectCuenta valor={cuenta} cuentas={cuentas} alCambiar={setCuenta} />
+          <SelectCuenta valor={cuenta} cuentas={cuentas} alCambiar={escogerCuenta} />
+          <SelectMoneda valor={moneda} alCambiar={setMoneda} />
           <button className="btn chico">Agregar</button>
         </form>
       </div>
@@ -195,12 +171,13 @@ function PlantillasSeccion(props: { tipo: 'entrada' | 'fijo'; titulo: string; pl
   const [nombre, setNombre] = useState('')
   const [monto, setMonto] = useState('')
   const [dia, setDia] = useState('')
+  const [moneda, setMoneda] = useState<Moneda>('CRC')
 
   async function agregar(e: FormEvent) {
     e.preventDefault()
     if (!nombre.trim()) return
     await hacer(() =>
-      agregarDoc('plantillas', { tipo, nombre: nombre.trim(), monto: leerMonto(monto), dia_vence: dia ? Number(dia) : null, orden: props.plantillas.length }),
+      agregarDoc('plantillas', { tipo, nombre: nombre.trim(), monto: leerMonto(monto), moneda, dia_vence: dia ? Number(dia) : null, cuenta_id: null, orden: props.plantillas.length }),
     )
     setNombre('')
     setMonto('')
@@ -216,7 +193,7 @@ function PlantillasSeccion(props: { tipo: 'entrada' | 'fijo'; titulo: string; pl
             <div className="crece">
               <span>{p.nombre}</span>
               <span className="suave peq num">
-                {colones(p.monto)}
+                {dinero(p.monto, p.moneda)}
                 {p.dia_vence ? ` · vence día ${p.dia_vence}` : ''}
               </span>
             </div>
@@ -228,7 +205,8 @@ function PlantillasSeccion(props: { tipo: 'entrada' | 'fijo'; titulo: string; pl
         ))}
         <form className="form-fila" onSubmit={agregar} style={lista.length ? undefined : { borderTop: 'none' }}>
           <input className="inp chico" placeholder={tipo === 'entrada' ? 'Ej.: Salario 1.ª quincena' : 'Ej.: Cel'} value={nombre} onChange={(e) => setNombre(e.target.value)} aria-label="Nombre" />
-          <input className="inp chico num" placeholder="₡" value={monto} onChange={(e) => setMonto(e.target.value)} inputMode="decimal" style={{ flex: '0 1 100px' }} aria-label="Monto" />
+          <SelectMoneda valor={moneda} alCambiar={setMoneda} />
+          <input className="inp chico num" placeholder={SIMBOLO[moneda]} value={monto} onChange={(e) => setMonto(e.target.value)} inputMode="decimal" style={{ flex: '0 1 100px' }} aria-label="Monto" />
           {tipo === 'fijo' && (
             <input className="inp chico" placeholder="Día" value={dia} onChange={(e) => setDia(e.target.value.replace(/\D/g, '').slice(0, 2))} inputMode="numeric" style={{ flex: '0 1 64px' }} aria-label="Día que vence" />
           )}
@@ -265,6 +243,45 @@ function SobranteSeccion({ desdeMes, hacer }: { desdeMes: string | null; hacer: 
           </label>
         )}
       </div>
+    </div>
+  )
+}
+
+function SobreFila({ s, cuentas, hacer }: { s: Sobre; cuentas: Cuenta[]; hacer: Hacer }) {
+  const [modo, setModo] = useState<'poner' | 'sacar' | null>(null)
+  return (
+    <div className="fila" style={{ flexWrap: 'wrap' }}>
+      <input
+        key={s.nombre}
+        className="inp chico"
+        defaultValue={s.nombre}
+        aria-label="Nombre del sobre"
+        style={{ flex: '1 1 120px' }}
+        onBlur={(e) => e.target.value.trim() && e.target.value !== s.nombre && hacer(() => cambiar('sobres', s.id, { nombre: e.target.value.trim() }))}
+      />
+      <strong className={`num ${s.monto < 0 ? 'debe' : ''}`} style={{ minWidth: 90, textAlign: 'right', fontSize: 17 }}>
+        {dinero(s.monto, s.moneda)}
+      </strong>
+      {modo ? (
+        <PedirMonto
+          etiqueta={modo === 'poner' ? `Cuánto poner en ${s.nombre}` : `Cuánto sacar de ${s.nombre}`}
+          boton={modo === 'poner' ? 'Poner' : 'Sacar'}
+          alCancelar={() => setModo(null)}
+          alListo={(n) => {
+            setModo(null)
+            hacer(() => cambiar('sobres', s.id, { monto: increment(modo === 'poner' ? n : -n) }))
+          }}
+        />
+      ) : (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', width: '100%' }}>
+          <button className="btn chico verde" onClick={() => setModo('poner')}>+ Poner</button>
+          <button className="btn chico borde" onClick={() => setModo('sacar')}>− Sacar</button>
+          <SelectCuenta valor={s.cuenta_id} cuentas={cuentas} alCambiar={(id) => hacer(() => cambiar('sobres', s.id, { cuenta_id: id }))} />
+          <SelectMoneda valor={s.moneda} alCambiar={(m) => hacer(() => cambiar('sobres', s.id, { moneda: m }))} />
+          <span style={{ flex: 1 }} />
+          <Borrar etiqueta={s.nombre} alBorrar={() => hacer(() => borrar('sobres', s.id))} />
+        </div>
+      )}
     </div>
   )
 }

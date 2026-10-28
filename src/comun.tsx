@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
 import { mensaje } from './firebase'
 import { gastosYPagos, misGrupos } from './datos'
+import { SIMBOLO, type Moneda } from './dinero'
 import type { Gasto, Grupo, Miembro, PagoGrupo, Perfil } from './tipos'
 
 // ───────────── Navegación ─────────────
@@ -48,10 +49,21 @@ export type DatosGrupos = {
 export async function cargarGrupos(): Promise<DatosGrupos> {
   const grupos = await misGrupos()
   const todo = await Promise.all(grupos.map((g) => gastosYPagos(g.id)))
-  const miembros = grupos.flatMap((g) => g.miembros.map((user_id) => ({ grupo_id: g.id, user_id })))
   const perfiles: Record<string, Perfil> = {}
-  for (const g of grupos) for (const [id, nombre] of Object.entries(g.nombres ?? {})) perfiles[id] = { id, nombre, email: '' }
-  return { grupos, miembros, perfiles, gastos: todo.flatMap((x) => x.gastos), pagos: todo.flatMap((x) => x.pagos) }
+  const miembros: { grupo_id: string; user_id: string }[] = []
+  const gastos: Gasto[] = []
+  const pagos: PagoGrupo[] = []
+  grupos.forEach((g, i) => {
+    // Lo anotado a nombre de una persona sin cuenta pasa a su usuario cuando ya está vinculada.
+    const v = (id: string) => g.vinculos?.[id] ?? id
+    const sinCuenta = Object.keys(g.personas ?? {}).filter((pid) => !g.vinculos?.[pid])
+    for (const user_id of [...g.miembros, ...sinCuenta]) miembros.push({ grupo_id: g.id, user_id })
+    for (const [id, nombre] of Object.entries(g.nombres ?? {})) perfiles[id] = { id, nombre, email: '' }
+    for (const pid of sinCuenta) perfiles[pid] = { id: pid, nombre: g.personas![pid].nombre, email: '' }
+    for (const x of todo[i].gastos) gastos.push({ ...x, pagado_por: v(x.pagado_por), partes: x.partes.map((p) => ({ ...p, user_id: v(p.user_id) })) })
+    for (const x of todo[i].pagos) pagos.push({ ...x, de: v(x.de), a: v(x.a) })
+  })
+  return { grupos, miembros, perfiles, gastos, pagos }
 }
 
 // Corre una escritura y muestra el error en pantalla si falla.
@@ -163,4 +175,58 @@ export function Cargando() {
 export function leerMonto(t: string): number {
   const n = Number(t.replace(/[₡\s,]/g, ''))
   return Number.isFinite(n) ? n : 0
+}
+
+// Borrar con confirmación dentro de la app (las ventanitas del navegador no siempre salen).
+export function BotonBorrar({ etiqueta, pregunta = '¿Borrar?', texto, alBorrar }: { etiqueta: string; pregunta?: string; texto?: string; alBorrar: () => void }) {
+  const [pidiendo, setPidiendo] = useState(false)
+  if (pidiendo) {
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }} role="group" aria-label={`Confirmar: ${etiqueta}`}>
+        <span className="peq debe">{pregunta}</span>
+        <button className="btn chico" style={{ background: 'var(--debe)' }} onClick={() => (setPidiendo(false), alBorrar())}>
+          Sí
+        </button>
+        <button className="btn chico borde" onClick={() => setPidiendo(false)}>
+          No
+        </button>
+      </span>
+    )
+  }
+  return (
+    <button className="btn peligro" aria-label={`Borrar ${etiqueta}`} onClick={() => setPidiendo(true)}>
+      {texto ?? <Icono n="basura" t={18} />}
+    </button>
+  )
+}
+
+// Pide un monto en la misma pantalla (en vez de la ventanita del navegador).
+export function PedirMonto(props: { etiqueta: string; inicial?: number; boton: string; alListo: (n: number) => void; alCancelar: () => void }) {
+  const [valor, setValor] = useState(props.inicial ? String(Math.round(props.inicial)) : '')
+  return (
+    <form
+      style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', width: '100%' }}
+      onSubmit={(e) => {
+        e.preventDefault()
+        const n = leerMonto(valor)
+        if (n > 0) props.alListo(n)
+      }}
+    >
+      <input className="inp chico num" style={{ flex: '1 1 110px' }} inputMode="decimal" placeholder="₡" value={valor} onChange={(e) => setValor(e.target.value)} aria-label={props.etiqueta} autoFocus />
+      <button className="btn chico verde">{props.boton}</button>
+      <button type="button" className="btn chico borde" onClick={props.alCancelar}>
+        Cancelar
+      </button>
+    </form>
+  )
+}
+
+// ₡ o $.
+export function SelectMoneda({ valor, alCambiar }: { valor: Moneda | undefined; alCambiar: (m: Moneda) => void }) {
+  return (
+    <select className="inp chico" style={{ flex: '0 0 62px', width: 62, padding: '0 6px' }} value={valor ?? 'CRC'} onChange={(e) => alCambiar(e.target.value as Moneda)} aria-label="Moneda">
+      <option value="CRC">{SIMBOLO.CRC}</option>
+      <option value="USD">{SIMBOLO.USD}</option>
+    </select>
+  )
 }

@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { agregar as agregarDoc, agregarGasto, listar } from '../datos'
 import { mensaje } from '../firebase'
 import { Atras, Cargando, MensajeError, cargarGrupos, leerMonto, nombreDe, useCarga, useSesion, type Vista } from '../comun'
-import { colones, dividir, mesDe, type Division } from '../dinero'
+import { SIMBOLO, colones, dividir, mesDe, type Division, type Moneda } from '../dinero'
 import type { Cuenta } from '../tipos'
 
 const PERSONAL = 'personal'
@@ -23,6 +23,7 @@ export function NuevoGasto({ grupoId, volver }: { grupoId?: string; volver: Vist
   const [division, setDivision] = useState<Division>('mitad')
   const [manual, setManual] = useState<Record<string, string>>({})
   const [medio, setMedio] = useState('')
+  const [moneda, setMoneda] = useState<Moneda>('CRC')
   const [anotar, setAnotar] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [guardando, setGuardando] = useState(false)
@@ -90,10 +91,12 @@ export function NuevoGasto({ grupoId, volver }: { grupoId?: string; volver: Vist
           tipo: 'extra',
           nombre: esPersonal ? desc.trim() : `${desc.trim()} (${grupos.find((x) => x.id === grupo)?.nombre})`,
           monto: montoMio,
+          moneda: esPersonal ? moneda : 'CRC',
           hecho: true,
           dia_vence: null,
           cuenta_id: cuenta?.id ?? null,
           gasto_id: gastoId,
+          grupo_id: esPersonal ? null : grupo,
           orden: 999,
         })
       }
@@ -115,7 +118,15 @@ export function NuevoGasto({ grupoId, volver }: { grupoId?: string; volver: Vist
 
       <label className="campo" style={{ alignItems: 'center' }}>
         <span>Monto</span>
-        <input className="inp-monto num" inputMode="decimal" placeholder="₡0" value={monto} onChange={(e) => setMonto(e.target.value)} autoFocus />
+        <input className="inp-monto num" inputMode="decimal" placeholder={`${SIMBOLO[esPersonal ? moneda : 'CRC']}0`} value={monto} onChange={(e) => setMonto(e.target.value)} autoFocus />
+        {esPersonal ? (
+          <div className="segs" style={{ justifyContent: 'center' }}>
+            <button type="button" className={`seg ${moneda === 'CRC' ? 'on' : ''}`} style={{ flex: '0 0 120px' }} onClick={() => setMoneda('CRC')}>₡ Colones</button>
+            <button type="button" className={`seg ${moneda === 'USD' ? 'on' : ''}`} style={{ flex: '0 0 120px' }} onClick={() => setMoneda('USD')}>$ Dólares</button>
+          </div>
+        ) : (
+          <span className="suave peq">Los gastos de grupo van en colones.</span>
+        )}
       </label>
 
       <label className="campo">
@@ -209,7 +220,7 @@ export function NuevoGasto({ grupoId, volver }: { grupoId?: string; volver: Vist
           <span>Pagué con</span>
           <div className="segs">
             {d.cuentas.map((c) => (
-              <button type="button" key={c.id} className={`seg ${medio === c.nombre ? 'on' : ''}`} onClick={() => setMedio(medio === c.nombre ? '' : c.nombre)}>
+              <button type="button" key={c.id} className={`seg ${medio === c.nombre ? 'on' : ''}`} onClick={() => (setMedio(medio === c.nombre ? '' : c.nombre), medio !== c.nombre && setMoneda(c.moneda ?? 'CRC'))}>
                 {c.nombre}
               </button>
             ))}

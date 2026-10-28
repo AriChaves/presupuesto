@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { colones, dividir, liquidar, moverMes, nombreMes, proximosPagos, saldosNetos, sobranteArrastrado } from './dinero'
+import { colones, colonesQueFaltan, convertir, dinero, dividir, dolaresParaCambiar, ultimoTipoDeCambio, liquidar, moverMes, nombreMes, proximosPagos, resumenMes, saldosNetos, sobranteArrastrado, sumarPorMoneda, textoMonedas } from './dinero'
 
 describe('colones', () => {
   it('formatea con separador de miles', () => {
@@ -103,5 +103,87 @@ describe('sobrante que pasa al mes siguiente', () => {
   })
   it('apagado no arrastra nada', () => {
     expect(sobranteArrastrado(datos, null, '2026-12')).toBe(0)
+  })
+})
+
+describe('dos monedas', () => {
+  it('formatea dólares con centavos', () => {
+    expect(dinero(1234.5, 'USD')).toBe('$1,234.50')
+    expect(dinero(-20, 'USD')).toBe('−$20.00')
+    expect(dinero(8900.74)).toBe('₡8,901')
+  })
+  it('suma cada moneda por aparte y sin moneda cuenta como colones', () => {
+    const t = sumarPorMoneda([{ monto: 1000 }, { monto: 50, moneda: 'USD' }, { monto: 500, moneda: 'CRC' }, { monto: 25.5, moneda: 'USD' }])
+    expect(t).toEqual({ CRC: 1500, USD: 75.5 })
+    expect(textoMonedas(t)).toBe('₡1,500 · $75.50')
+    expect(textoMonedas({ CRC: 1500, USD: 0 })).toBe('₡1,500')
+    expect(textoMonedas({ CRC: 0, USD: 10 })).toBe('$10.00')
+  })
+  it('el sobrante en dólares pasa por aparte', () => {
+    const datos = [
+      { mes: '2026-11', tipo: 'entrada', monto: 100000, hecho: true },
+      { mes: '2026-11', tipo: 'entrada', monto: 200, hecho: true, moneda: 'USD' as const },
+      { mes: '2026-11', tipo: 'extra', monto: 50, hecho: true, moneda: 'USD' as const },
+    ]
+    expect(sobranteArrastrado(datos, '2026-11', '2026-12')).toBe(100000)
+    expect(sobranteArrastrado(datos, '2026-11', '2026-12', 'USD')).toBe(150)
+  })
+})
+
+describe('cambio de dólares a colones', () => {
+  // Gana $1,000, cambia $300 y recibe ₡156,000, paga ₡100,000 y Spotify $5.99.
+  const mes = '2026-12'
+  const datos = [
+    { mes, tipo: 'entrada', monto: 1000, hecho: true, moneda: 'USD' as const },
+    { mes, tipo: 'cambio', monto: -300, hecho: true, moneda: 'USD' as const },
+    { mes, tipo: 'cambio', monto: 156000, hecho: true, moneda: 'CRC' as const },
+    { mes, tipo: 'fijo', monto: 100000, hecho: true, moneda: 'CRC' as const },
+    { mes, tipo: 'fijo', monto: 5.99, hecho: true, moneda: 'USD' as const },
+  ]
+  it('el cambio no cuenta como gasto ni como entrada, pero sí en el sobrante', () => {
+    expect(resumenMes(datos, 'USD')).toEqual({ entradas: 1000, cambio: -300, gasto: 5.99, sobrante: 694.01 })
+    expect(resumenMes(datos, 'CRC')).toEqual({ entradas: 0, cambio: 156000, gasto: 100000, sobrante: 56000 })
+  })
+  it('el sobrante de cada moneda pasa al mes siguiente con el cambio incluido', () => {
+    expect(sobranteArrastrado(datos, mes, '2027-01', 'USD')).toBeCloseTo(694.01)
+    expect(sobranteArrastrado(datos, mes, '2027-01', 'CRC')).toBe(56000)
+  })
+  it('suma lo arrastrado a las entradas', () => {
+    expect(resumenMes(datos, 'CRC', 8900.74).sobrante).toBeCloseTo(64900.74)
+  })
+})
+
+describe('cuántos dólares cambiar', () => {
+  const mes = '2026-11'
+  it('faltan los colones de lo planeado, aunque no esté pagado todavía', () => {
+    const datos = [
+      { mes, tipo: 'entrada', monto: 1000, hecho: true, moneda: 'USD' as const }, // en dólares: no cuenta
+      { mes, tipo: 'fijo', monto: 33975.29, hecho: false },
+      { mes, tipo: 'extra', monto: 43872.91, hecho: false },
+      { mes, tipo: 'fijo', monto: 13.55, hecho: false, moneda: 'USD' as const }, // Spotify en dólares: no cuenta
+      { mes, tipo: 'cambio', monto: 50000, hecho: true }, // ya cambió ₡50,000
+    ]
+    expect(colonesQueFaltan(datos)).toBeCloseTo(27848.2)
+    expect(colonesQueFaltan(datos, 30000)).toBe(0)
+  })
+  it('usa el tipo del cambio más reciente', () => {
+    const c = (cambio_id: string, mes: string, usd: number, crc: number, creadoEn = 0) => [
+      { mes, tipo: 'cambio', monto: -usd, hecho: true, moneda: 'USD' as const, cambio_id, creadoEn },
+      { mes, tipo: 'cambio', monto: crc, hecho: true, moneda: 'CRC' as const, cambio_id, creadoEn },
+    ]
+    expect(ultimoTipoDeCambio([])).toBeNull()
+    expect(ultimoTipoDeCambio([...c('a', '2026-10', 300, 156000), ...c('b', '2026-11', 100, 51500, 5), ...c('c', '2026-11', 100, 51000, 2)])).toBe(515)
+  })
+  it('redondea los dólares hacia arriba', () => {
+    expect(dolaresParaCambiar(27848.2, 515)).toBe(54.08)
+    expect(dolaresParaCambiar(0, 515)).toBe(0)
+  })
+})
+
+describe('convertir con el tipo de ARi', () => {
+  it('dólares a colones y al revés', () => {
+    expect(convertir(300, 'USD', 515.5)).toBe(154650)
+    expect(convertir(51550, 'CRC', 515.5)).toBe(100)
+    expect(convertir(300, 'USD', 0)).toBe(0)
   })
 })

@@ -1,7 +1,18 @@
-import type { Division, Parte } from './dinero'
+import type { Division, Moneda, Parte } from './dinero'
 
 export type Perfil = { id: string; nombre: string; email: string }
-export type Grupo = { id: string; nombre: string; creadoPor: string; miembros: string[]; nombres: Record<string, string>; invitados: string[] }
+// personas: gente del grupo que todavía no tiene cuenta (se anotan gastos a su nombre).
+// vinculos: cuando esa persona entra con su cuenta, su id de persona apunta a su usuario.
+export type Grupo = {
+  id: string
+  nombre: string
+  creadoPor: string
+  miembros: string[]
+  nombres: Record<string, string>
+  invitados: string[]
+  personas?: Record<string, { nombre: string }>
+  vinculos?: Record<string, string>
+}
 export type Miembro = { grupo_id: string; user_id: string }
 
 export type Gasto = {
@@ -19,11 +30,12 @@ export type Gasto = {
 
 export type PagoGrupo = { id: string; grupo_id: string; de: string; a: string; monto: number; fecha: string; nota: string }
 
-export type Cuenta = { id: string; nombre: string; tipo: string; efectivo_suelto: number; orden: number }
-export type Sobre = { id: string; nombre: string; monto: number; cuenta_id: string | null; orden: number }
+export type Cuenta = { id: string; nombre: string; tipo: string; efectivo_suelto: number; orden: number; moneda?: Moneda }
+export type Sobre = { id: string; nombre: string; monto: number; cuenta_id: string | null; orden: number; moneda?: Moneda }
 
-export type TipoRenglon = 'entrada' | 'fijo' | 'extra' | 'transporte'
-export type Plantilla = { id: string; tipo: 'entrada' | 'fijo'; nombre: string; monto: number; dia_vence: number | null; cuenta_id: string | null; orden: number }
+// 'cambio': pasar plata de una moneda a otra. Va en pareja (sale de una, entra en la otra) con el mismo cambio_id.
+export type TipoRenglon = 'entrada' | 'fijo' | 'extra' | 'transporte' | 'cambio'
+export type Plantilla = { id: string; tipo: 'entrada' | 'fijo'; nombre: string; monto: number; dia_vence: number | null; cuenta_id: string | null; orden: number; moneda?: Moneda }
 export type Renglon = {
   id: string
   mes: string
@@ -35,6 +47,9 @@ export type Renglon = {
   cuenta_id: string | null
   gasto_id: string | null
   orden: number
+  moneda?: Moneda
+  cambio_id?: string
+  grupo_id?: string
 }
 
 export type Prestamo = {
