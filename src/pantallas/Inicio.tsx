@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { listar, where } from '../datos'
+import { cargarArrastre, listar, where } from '../datos'
 import { Cargando, Icono, MensajeError, cargarGrupos, inicial, nombreDe, useCarga, useSesion } from '../comun'
 import { colones, mesDe, nombreMes } from '../dinero'
 import type { Renglon } from '../tipos'
@@ -29,12 +29,13 @@ export function Inicio() {
   const { yo, ir, salir } = useSesion()
   const mes = mesDe(new Date())
   const carga = useCarga(async () => {
-    const [grupos, r, venc] = await Promise.all([
+    const [grupos, r, venc, arrastre] = await Promise.all([
       cargarGrupos(),
       listar<Renglon>('renglones', where('mes', '==', mes)),
       cargarVencimientos(),
+      cargarArrastre(mes),
     ])
-    return { grupos, renglones: r, venc }
+    return { grupos, renglones: r, venc, arrastre }
   }, [mes])
 
   useEffect(() => {
@@ -42,8 +43,8 @@ export function Inicio() {
   }, [carga.datos])
 
   const d = carga.datos
-  const entradas = d?.renglones.filter((r) => r.tipo === 'entrada').reduce((s, r) => s + Number(r.monto), 0) ?? 0
-  const gasto = d?.renglones.filter((r) => r.tipo !== 'entrada').reduce((s, r) => s + Number(r.monto), 0) ?? 0
+  const entradas = (d?.renglones.filter((r) => r.tipo === 'entrada' && r.hecho).reduce((s, r) => s + Number(r.monto), 0) ?? 0) + (d?.arrastre ?? 0)
+  const gasto = d?.renglones.filter((r) => r.tipo !== 'entrada' && r.hecho).reduce((s, r) => s + Number(r.monto), 0) ?? 0
   const sobrante = entradas - gasto
   const uso = entradas > 0 ? Math.min(100, (gasto / entradas) * 100) : 0
 

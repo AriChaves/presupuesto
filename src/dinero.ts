@@ -110,3 +110,15 @@ export function proximosPagos(items: Vencimiento[], hoy: Date): ProximoPago[] {
     })
     .sort((a, b) => a.dias - b.dias)
 }
+
+export type RenglonMes = { mes: string; tipo: string; monto: number; hecho: boolean }
+
+// Lo que viene sobrando de los meses anteriores: desde `desde` hasta antes de `mes`.
+// Cada mes pasa al siguiente lo que entró menos lo que se gastó (solo lo marcado).
+export function sobranteArrastrado(renglones: RenglonMes[], desde: string | null, mes: string): number {
+  if (!desde || mes <= desde) return 0
+  const total = renglones
+    .filter((r) => r.hecho && r.mes >= desde && r.mes < mes)
+    .reduce((s, r) => s + (r.tipo === 'entrada' ? r.monto : -r.monto), 0)
+  return redondear(total)
+}

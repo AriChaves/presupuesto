@@ -18,7 +18,8 @@ import {
   type QueryConstraint,
 } from 'firebase/firestore'
 import { auth, db } from './firebase'
-import type { Gasto, Grupo, PagoGrupo, Perfil } from './tipos'
+import type { Gasto, Grupo, PagoGrupo, Perfil, Renglon } from './tipos'
+import { sobranteArrastrado } from './dinero'
 
 const uid = () => {
   const u = auth.currentUser
@@ -122,4 +123,20 @@ export function escucharGrupo(gid: string, alCambiar: () => void): () => void {
     onSnapshot(doc(db, 'grupos', gid), saltarPrimera()),
   ]
   return () => quitar.forEach((q) => q())
+}
+
+// ───────────── Sobrante que pasa al mes siguiente ─────────────
+export async function leerDesdeMes(): Promise<string | null> {
+  const s = await getDoc(doc(db, 'usuarios', uid()))
+  return (s.data()?.desdeMes as string | undefined) ?? null
+}
+
+export const guardarDesdeMes = (desdeMes: string | null) => setDoc(doc(db, 'usuarios', uid()), { desdeMes }, { merge: true })
+
+// Lo que viene sobrando de los meses anteriores a `mes` (0 si está apagado).
+export async function cargarArrastre(mes: string): Promise<number> {
+  const desde = await leerDesdeMes()
+  if (!desde || mes <= desde) return 0
+  const anteriores = await listar<Renglon>('renglones', where('mes', '>=', desde), where('mes', '<', mes))
+  return sobranteArrastrado(anteriores, desde, mes)
 }

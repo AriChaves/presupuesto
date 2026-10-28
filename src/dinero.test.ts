@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { colones, dividir, liquidar, moverMes, nombreMes, proximosPagos, saldosNetos } from './dinero'
+import { colones, dividir, liquidar, moverMes, nombreMes, proximosPagos, saldosNetos, sobranteArrastrado } from './dinero'
 
 describe('colones', () => {
   it('formatea con separador de miles', () => {
@@ -76,5 +76,32 @@ describe('próximos pagos', () => {
   it('el día 31 cae en el último día de un mes corto', () => {
     const r = proximosPagos([{ nombre: 'X', monto: 1, dia: 31 }], new Date(2026, 1, 10))
     expect(r[0].fecha.getDate()).toBe(28)
+  })
+})
+
+describe('sobrante que pasa al mes siguiente', () => {
+  const r = (mes: string, tipo: string, monto: number, hecho = true) => ({ mes, tipo, monto, hecho })
+  const datos = [
+    r('2026-10', 'entrada', 152600), // antes de empezar: no cuenta
+    r('2026-11', 'entrada', 157691.29),
+    r('2026-11', 'entrada', 152600, false), // no recibido: no cuenta
+    r('2026-11', 'fijo', 48469.11),
+    r('2026-11', 'extra', 60000),
+    r('2026-11', 'transporte', 40321.44),
+    r('2026-11', 'fijo', 120000, false), // no pagado: no cuenta
+    r('2026-12', 'entrada', 150000),
+    r('2026-12', 'fijo', 200000),
+  ]
+  it('noviembre empieza en cero', () => {
+    expect(sobranteArrastrado(datos, '2026-11', '2026-11')).toBe(0)
+  })
+  it('diciembre recibe el sobrante de noviembre (como el Excel: 8,900.74)', () => {
+    expect(sobranteArrastrado(datos, '2026-11', '2026-12')).toBeCloseTo(8900.74)
+  })
+  it('enero arrastra lo de noviembre y diciembre, aunque diciembre quede en negativo', () => {
+    expect(sobranteArrastrado(datos, '2026-11', '2027-01')).toBeCloseTo(8900.74 + 150000 - 200000)
+  })
+  it('apagado no arrastra nada', () => {
+    expect(sobranteArrastrado(datos, null, '2026-12')).toBe(0)
   })
 })

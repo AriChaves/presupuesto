@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { agregar as agregarDoc, borrar, cambiar, listar, where } from '../datos'
+import { agregar as agregarDoc, borrar, cambiar, cargarArrastre, listar, where } from '../datos'
 import { Cargando, Check, Icono, MensajeError, leerMonto, useCarga, useHacer, useSesion } from '../comun'
 import { colones, mesDe, moverMes, nombreMes } from '../dinero'
 import type { Cuenta, Plantilla, Renglon, Sobre, TipoRenglon } from '../tipos'
@@ -16,19 +16,21 @@ export function Presupuesto() {
   const [mes, setMes] = useState(mesDe(new Date()))
   const [error, setError] = useState<string | null>(null)
   const carga = useCarga(async () => {
-    const [renglones, cuentas, sobres, plantillas] = await Promise.all([
+    const [renglones, cuentas, sobres, plantillas, arrastre] = await Promise.all([
       listar<Renglon>('renglones', where('mes', '==', mes)),
       listar<Cuenta>('cuentas'),
       listar<Sobre>('sobres'),
       listar<Plantilla>('plantillas'),
+      cargarArrastre(mes),
     ])
-    return { renglones, cuentas, sobres, plantillas }
+    return { renglones, cuentas, sobres, plantillas, arrastre }
   }, [mes])
   const hacer = useHacer(setError, carga.recargar)
 
   const d = carga.datos
-  const entradas = d?.renglones.filter((r) => r.tipo === 'entrada').reduce((s, r) => s + r.monto, 0) ?? 0
-  const gasto = d?.renglones.filter((r) => r.tipo !== 'entrada').reduce((s, r) => s + r.monto, 0) ?? 0
+  // Como en el Excel: un renglón cuenta hasta que se marca (recibido o pagado).
+  const entradas = (d?.renglones.filter((r) => r.tipo === 'entrada' && r.hecho).reduce((s, r) => s + r.monto, 0) ?? 0) + (d?.arrastre ?? 0)
+  const gasto = d?.renglones.filter((r) => r.tipo !== 'entrada' && r.hecho).reduce((s, r) => s + r.monto, 0) ?? 0
 
   async function llenarDesdePlantillas() {
     if (!d) return
@@ -97,6 +99,7 @@ export function Presupuesto() {
               renglones={d.renglones.filter((r) => r.tipo === s.tipo)}
               hacer={hacer}
               mes={mes}
+              arrastre={s.tipo === 'entrada' ? d.arrastre : 0}
             />
           ))}
 
@@ -105,7 +108,6 @@ export function Presupuesto() {
               <span className="lbl">Sobres por cuenta</span>
             </div>
             <div className="card">
-              {d.cuentas.length === 0 && <div className="vacio">Todavía no tiene cuentas.</div>}
               {d.cuentas.map((c) => {
                 const sobres = d.sobres.filter((s) => s.cuenta_id === c.id)
                 const total = sobres.reduce((t, s) => t + s.monto, 0) + c.efectivo_suelto
@@ -123,6 +125,21 @@ export function Presupuesto() {
                   </div>
                 )
               })}
+              {(() => {
+                const ids = new Set(d.cuentas.map((c) => c.id))
+                const sueltos = d.sobres.filter((s) => !s.cuenta_id || !ids.has(s.cuenta_id))
+                if (sueltos.length === 0) return d.cuentas.length === 0 ? <div className="vacio">Todavía no tiene cuentas.</div> : null
+                return (
+                  <div className="fila">
+                    <div className="av cuadro">?</div>
+                    <div className="crece">
+                      <span>Sin cuenta asignada</span>
+                      <span className="suave peq">{sueltos.map((s) => `${s.nombre} ${colones(s.monto)}`).join(' · ')}</span>
+                    </div>
+                    <strong className="num">{colones(sueltos.reduce((t, s) => t + s.monto, 0))}</strong>
+                  </div>
+                )
+              })()}
               <button className="agregar" onClick={() => ir({ p: 'cuentas' })}>
                 Editar cuentas, sobres y plantillas
               </button>
@@ -136,12 +153,13 @@ export function Presupuesto() {
 
 type Hacer = (fn: () => Promise<unknown>) => Promise<void>
 
-function Seccion(props: { tipo: TipoRenglon; titulo: string; hecho: string; renglones: Renglon[]; hacer: Hacer; mes: string }) {
-  const { tipo, titulo, hecho, renglones, hacer, mes } = props
+function Seccion(props: { tipo: TipoRenglon; titulo: string; hecho: string; renglones: Renglon[]; hacer: Hacer; mes: string; arrastre: number }) {
+  const { tipo, titulo, hecho, renglones, hacer, mes, arrastre } = props
   const [nombre, setNombre] = useState('')
   const [monto, setMonto] = useState('')
   const [dia, setDia] = useState('')
-  const total = renglones.reduce((s, r) => s + r.monto, 0)
+  const total = renglones.reduce((s, r) => s + r.monto, 0) + arrastre
+  const recibido = renglones.filter((r) => r.hecho).reduce((s, r) => s + r.monto, 0) + arrastre
 
   async function agregar(e: FormEvent) {
     e.preventDefault()
@@ -168,9 +186,23 @@ function Seccion(props: { tipo: TipoRenglon; titulo: string; hecho: string; reng
     <div className="seccion">
       <div className="seccion-titulo">
         <span className="lbl">{titulo}</span>
-        <span className="suave peq num">{colones(total)}</span>
+        <span className="suave peq num">{recibido !== total ? `${colones(recibido)} de ${colones(total)}` : colones(total)}</span>
       </div>
       <div className="card">
+        {arrastre !== 0 && (
+          <div className="fila">
+            <div className="chk on" aria-hidden="true" style={{ cursor: 'default' }}>
+              <span style={{ color: '#fff', display: 'flex' }}>
+                <Icono n="check" t={15} grosor={3} />
+              </span>
+            </div>
+            <div className="crece">
+              <span>{arrastre > 0 ? 'Sobrante' : 'Faltante'} de {nombreMes(moverMes(mes, -1), false).toLowerCase()}</span>
+              <span className="chip">Automático · viene del mes anterior</span>
+            </div>
+            <strong className={`num ${arrastre < 0 ? 'debe' : ''}`} style={{ paddingRight: 8 }}>{colones(arrastre)}</strong>
+          </div>
+        )}
         {renglones.map((r) => (
           <div className="fila" key={r.id}>
             <Check

@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
-import { agregar as agregarDoc, borrar, cambiar, listar } from '../datos'
+import { agregar as agregarDoc, borrar, cambiar, guardarDesdeMes, leerDesdeMes, listar } from '../datos'
 import { Atras, Cargando, Icono, MensajeError, leerMonto, useCarga, useHacer } from '../comun'
-import { colones } from '../dinero'
+import { colones, mesDe, nombreMes } from '../dinero'
 import type { Cuenta, Plantilla, Sobre } from '../tipos'
 
 const TIPOS_CUENTA = ['tarjeta', 'cuenta de ahorro', 'efectivo', 'otra']
@@ -11,8 +11,8 @@ type Hacer = (fn: () => Promise<unknown>) => Promise<void>
 export function Cuentas() {
   const [error, setError] = useState<string | null>(null)
   const carga = useCarga(async () => {
-    const [cuentas, sobres, plantillas] = await Promise.all([listar<Cuenta>('cuentas'), listar<Sobre>('sobres'), listar<Plantilla>('plantillas')])
-    return { cuentas, sobres, plantillas }
+    const [cuentas, sobres, plantillas, desdeMes] = await Promise.all([listar<Cuenta>('cuentas'), listar<Sobre>('sobres'), listar<Plantilla>('plantillas'), leerDesdeMes()])
+    return { cuentas, sobres, plantillas, desdeMes }
   }, [])
   const hacer: Hacer = useHacer(setError, carga.recargar)
 
@@ -31,6 +31,7 @@ export function Cuentas() {
         <Cargando />
       ) : (
         <>
+          <SobranteSeccion desdeMes={d.desdeMes} hacer={hacer} />
           <CuentasSeccion cuentas={d.cuentas} hacer={hacer} />
           <SobresSeccion sobres={d.sobres} cuentas={d.cuentas} hacer={hacer} />
           <PlantillasSeccion tipo="entrada" titulo="Entradas de cada mes" plantillas={d.plantillas} cuentas={d.cuentas} hacer={hacer} />
@@ -233,6 +234,36 @@ function PlantillasSeccion(props: { tipo: 'entrada' | 'fijo'; titulo: string; pl
           )}
           <button className="btn chico">Agregar</button>
         </form>
+      </div>
+    </div>
+  )
+}
+
+function SobranteSeccion({ desdeMes, hacer }: { desdeMes: string | null; hacer: Hacer }) {
+  return (
+    <div className="seccion">
+      <span className="lbl">Lo que sobra cada mes</span>
+      <div className="card pad">
+        <label style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <span>Pasarlo como entrada al mes siguiente</span>
+            <span className="suave peq">
+              {desdeMes ? `Desde ${nombreMes(desdeMes).toLowerCase()}. Si un mes queda en negativo, también se pasa.` : 'Apagado: cada mes empieza de cero.'}
+            </span>
+          </span>
+          <input
+            type="checkbox"
+            checked={Boolean(desdeMes)}
+            onChange={(e) => hacer(() => guardarDesdeMes(e.target.checked ? mesDe(new Date()) : null))}
+            style={{ width: 22, height: 22, accentColor: 'var(--verde)' }}
+          />
+        </label>
+        {desdeMes && (
+          <label className="campo">
+            <span>Empezar a contar desde</span>
+            <input className="inp" type="month" value={desdeMes} onChange={(e) => e.target.value && hacer(() => guardarDesdeMes(e.target.value))} />
+          </label>
+        )}
       </div>
     </div>
   )
